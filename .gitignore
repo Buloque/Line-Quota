@@ -1,0 +1,17 @@
+# build e pacotes
+/target
+/dist
+
+# ferramentas locais (caminhos e dados da máquina do desenvolvedor)
+/.claude
+/graphify-out
+/CLAUDE.md
+/.cato
+*.lq-bak
+
+# segredos / dados locais
+*.bin
+*.env
+.env*
+config.toml
+auth.json

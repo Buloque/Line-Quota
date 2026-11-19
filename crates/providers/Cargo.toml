@@ -1,0 +1,13 @@
+[package]
+name = "lq-providers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lq-core = { path = "../core" }
+lq-activity = { path = "../activity" }
+serde_json.workspace = true
+ureq.workspace = true
+rusqlite = { version = "0.32", features = ["bundled"] }
+windows = { workspace = true, features = ["Win32_Foundation", "Win32_Security_Cryptography"] }

@@ -1,0 +1,16 @@
+[package]
+name = "line-quota"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+lq-core = { path = "../core" }
+lq-providers = { path = "../providers" }
+lq-ui = { path = "../ui" }
+lq-activity = { path = "../activity" }
+serde_json.workspace = true
+
+
+[build-dependencies]
+winresource.workspace = true
