@@ -59,6 +59,8 @@ abrir, sem Electron: é um executável nativo de **3 MB**.
 </div>
 
 - **Atualizar é o mesmo caminho:** rode o instalador novo por cima. Ele mostra *"Atualizar da versão X para Y"*, troca o programa e mantém suas configurações.
+- **Tema escuro:** o instalador segue o modo escuro do Windows (janela e barra de título).
+- **Desinstalar pelo próprio instalador:** se o Line Quota já está instalado, abra o instalador de novo e clique em **Desinstalar** (com a opção de apagar também as configurações).
 - **Sem administrador.** Instala em `%LOCALAPPDATA%\Programs\LineQuota`.
 - **Nenhum agente é obrigatório.** Na primeira execução só ficam ligados os que existem no computador; os hooks do Claude Code, do Cursor e do Antigravity só são configurados se eles estiverem instalados, mesclados com os seus (com backup de `settings.json` e `hooks.json`). Se instalar o Cursor ou o Antigravity depois, rode o instalador de novo para configurar o hook dele.
 - **Desinstalar:** *Configurações do Windows → Aplicativos instalados → Line Quota*. O desinstalador pergunta se deve apagar também as configurações (**purge**).
