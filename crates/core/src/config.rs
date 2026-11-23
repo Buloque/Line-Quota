@@ -126,6 +126,8 @@ pub struct UiConfig {
     pub font: String,
     /// Painel em árvore: só chats em execução ou ativos nesta janela (minutos).
     pub chat_window_mins: u32,
+    /// Ordem dos provedores na barra (o usuário escolhe nas Configurações). Faltantes entram no fim; repetidos e desconhecidos saem.
+    pub provider_order: Vec<ProviderId>,
 }
 
 impl Default for UiConfig {
@@ -133,7 +135,7 @@ impl Default for UiConfig {
         Self { compact: true, show_remaining: false, exact_reset_time: false, autostart: true,
                display: DisplayMode::Both, bar_style: BarStyle::Horizontal, activity_style: ActivityStyle::Dot, show_tags: true, labels: LabelStyle::Icon, anchor: Anchor::BesideTray,
                monitor: 0, bar_offset: 0, transparent: true, auto_mode: true, auto_hide_when_none: true,
-               locked: true, font: "Calibri".into(), chat_window_mins: 30 }
+               locked: true, font: "Calibri".into(), chat_window_mins: 30, provider_order: ProviderId::ALL.to_vec() }
     }
 }
 
@@ -207,6 +209,25 @@ impl Config {
             ProviderId::Cursor => &self.cursor,
             ProviderId::Antigravity => &self.antigravity,
         }
+    }
+
+    /// Ordem efetiva dos provedores na barra: a escolhida, sem repetidos, com os que faltam no fim.
+    pub fn ordered_providers(&self) -> Vec<ProviderId> {
+        let mut out: Vec<ProviderId> = Vec::new();
+        for id in self.ui.provider_order.iter().chain(ProviderId::ALL.iter()) {
+            if !out.contains(id) { out.push(*id); }
+        }
+        out
+    }
+
+    /// Move o provedor na posição `idx` da ordem uma casa (`delta` = -1 sobe, +1 desce). Devolve a nova posição.
+    pub fn move_provider(&mut self, idx: usize, delta: i32) -> Option<usize> {
+        let mut order = self.ordered_providers();
+        let to = idx as i32 + delta;
+        if idx >= order.len() || to < 0 || to as usize >= order.len() { return None; }
+        order.swap(idx, to as usize);
+        self.ui.provider_order = order;
+        Some(to as usize)
     }
 
     pub fn providers_mut(&mut self) -> [&mut ProviderConfig; 5] { [&mut self.claude, &mut self.codex, &mut self.opencode, &mut self.cursor, &mut self.antigravity] }
@@ -294,5 +315,25 @@ activity_style = \"ring\"").unwrap().ui.activity_style, ActivityStyle::Dot);
             let _ = Config::from_toml(&String::from_utf8_lossy(&m)); // pode recusar, nunca entrar em pânico
         }
         assert!(Config::from_toml(&base).is_ok());
+    }
+
+    #[test]
+    fn provider_order_is_normalized_and_movable() {
+        let mut c = Config::default();
+        assert_eq!(c.ordered_providers(), ProviderId::ALL.to_vec());
+        // repetidos, faltantes: normaliza
+        c.ui.provider_order = vec![ProviderId::Antigravity, ProviderId::Antigravity, ProviderId::Codex];
+        assert_eq!(c.ordered_providers(), vec![ProviderId::Antigravity, ProviderId::Codex, ProviderId::Claude, ProviderId::OpenCode, ProviderId::Cursor]);
+        c.ui.provider_order.clear();
+        assert_eq!(c.move_provider(0, -1), None); // já é o primeiro
+        assert_eq!(c.move_provider(4, 1), None); // já é o último
+        assert_eq!(c.move_provider(1, -1), Some(0));
+        assert_eq!(c.ordered_providers()[..2], [ProviderId::Codex, ProviderId::Claude]);
+        // vai e volta pelo toml, e config antiga (sem o campo) usa a ordem padrão
+        let back = Config::from_toml(&c.to_toml()).unwrap();
+        assert_eq!(back.ordered_providers(), c.ordered_providers());
+        assert_eq!(Config::from_toml("[ui]
+compact = true
+").unwrap().ordered_providers(), ProviderId::ALL.to_vec());
     }
 }

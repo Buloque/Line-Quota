@@ -11,7 +11,7 @@
 ![Licença](https://img.shields.io/badge/licen%C3%A7a-MIT-3FB950)
 ![Tamanho](https://img.shields.io/badge/execut%C3%A1vel-3%2C0%20MB-8957E5)
 ![Memória](https://img.shields.io/badge/mem%C3%B3ria-~26%20MB-F2CC60)
-![Testes](https://img.shields.io/badge/testes-115%20passando-3FB950)
+![Testes](https://img.shields.io/badge/testes-117%20passando-3FB950)
 
 <img src="docs/images/widget-styles.png" alt="Os quatro formatos de gráfico do widget: barra horizontal, vertical, círculo e blocos (o Antigravity no fim de cada linha)" width="720">
 
@@ -33,6 +33,7 @@ abrir, sem Electron: é um executável nativo de **3 MB**.
 | 🟢 **O que cada agente faz** | Ponto verde quando trabalha, `?` quando espera você (ou, à escolha, uma linha colorida ao redor do ícone). Clique para abrir a árvore *Projeto → Chat → pedido atual*. |
 | 🔔 **Avisos úteis** | Notificações do Windows ao passar de 80/90/95%, quando o limite renova, quando uma tarefa termina ou precisa de você. |
 | 🎨 **Do seu jeito** | Barra horizontal, vertical, círculo ou blocos; com ou sem número; com ou sem rótulos; ícone, texto ou nada; fundo transparente; qualquer fonte. |
+| ↕️ **Ordem à sua escolha** | Em *Configurações → Ordem na barra* você escolhe a posição de cada IA (Codex, Antigravity e OpenCode; ou Antigravity, Cursor e Codex...): selecione na lista e use **Subir** / **Descer**. A barra muda na hora. |
 | 🪄 **Modo automático** | Mostra só o que está aberto e some quando nada está rodando. |
 | 🌌 **Antigravity (experimental)** | Mostra a atividade (ponto verde) pelos hooks oficiais dele (`~/.gemini/config/hooks.json`) e as **cotas** (Gemini semanal; Claude e GPT em 5 h e semanal, como na tela de uso dele), num gráfico triplo: três barras lado a lado (ou blocos em fileiras) e, no círculo, três anéis concêntricos: o maior é o Gemini, o do meio o Claude/GPT semanal e o menor o Claude/GPT de 5 h (cada cota num tom de verde: Gemini mais escuro, Claude semanal normal, Claude 5 h mais claro, em qualquer formato). Em *Cotas do Antigravity* você escolhe quais mostrar e se ficam juntas ou separadas, em qualquer formato de gráfico: barras lado a lado e, no círculo, um anel dentro do outro. As cotas vêm do servidor local do próprio Antigravity (só `127.0.0.1`). Fica desligado até você ligar em *Configurações → Provedores* (ou ser encontrado na primeira execução). |
 | 🧩 **Cursor (experimental)** | Mostra se o Cursor está trabalhando, pelos hooks oficiais dele. O **limite mensal** do plano aparece se você colar o cookie `WorkosCursorSessionToken` do painel (*Configurações → Provedores → Colar cookie*: abre o painel do Cursor, mostra o passo a passo com uma contagem de 3 minutos e detecta o cookie assim que você o copia); o Cursor não tem API oficial de uso nem login para apps de terceiros. Fica desligado até você ligar (ou ser encontrado na primeira execução). |
@@ -79,7 +80,7 @@ Para scripts: `LineQuota-Setup.exe` abre a janela; o programa instalado aceita
 | Memória em uso | **~26 MB** (set de trabalho, até ~34 MB depois de uso), 7 MB privados; estável, sem vazamento de memória, handles ou objetos GDI |
 | CPU parado | **~1%** de um núcleo (leitura local a cada 2 s; rede em outra thread) |
 | Hooks | **~60 ms** por chamada (Claude Code, Cursor e Antigravity), sem abrir janela |
-| Código | **~6 mil linhas** de Rust em 6 crates, **115 testes** automatizados |
+| Código | **~6 mil linhas** de Rust em 6 crates, **117 testes** automatizados |
 | Dependências nativas | Win32 puro (GDI, sem frameworks de interface) |
 | Chamadas de rede | Só `api.anthropic.com` (uso do Claude), `chatgpt.com` (uso do Codex) e `cursor.com` (uso do Cursor, só se você colar o cookie); o Antigravity é lido só localmente (`127.0.0.1`); sem telemetria |
 
@@ -119,7 +120,7 @@ Cada crate faz uma coisa: `core` (modelos, config e alertas), `activity` (hooks 
 
 ## Testes e verificações
 
-Antes de cada versão: `cargo test --workspace` (**115 testes**), `cargo clippy` (sem erros) e uma bateria manual no programa real.
+Antes de cada versão: `cargo test --workspace` (**117 testes**), `cargo clippy` (sem erros) e uma bateria manual no programa real.
 
 - **Entradas hostis:** os hooks recebem nomes de sessão com caminho (`../../x`), textos de 200 mil caracteres, JSON de tipo errado, lixo binário e 30 MB de entrada. Nada sai da pasta de atividade, os arquivos gravados ficam pequenos (textos cortados) e a leitura da entrada é limitada a 4 MiB.
 - **Fuzz dos leitores:** todo leitor de resposta ou credencial (Claude, Codex, Cursor, Antigravity, cookie, login) é alimentado com amostras truncadas, com bytes trocados e com lixo aleatório; o `config.toml` também. Pode recusar, nunca trava.

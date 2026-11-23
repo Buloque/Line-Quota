@@ -10,6 +10,11 @@ pub enum ProviderId {
     Antigravity,
 }
 
+impl ProviderId {
+    /// Todos os provedores, na ordem padrão da barra.
+    pub const ALL: [ProviderId; 5] = [ProviderId::Claude, ProviderId::Codex, ProviderId::OpenCode, ProviderId::Cursor, ProviderId::Antigravity];
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum MeterKind {
     FiveHour,

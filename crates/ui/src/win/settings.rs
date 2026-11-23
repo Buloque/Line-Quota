@@ -5,6 +5,7 @@ use super::*;
 static SET_HWND: AtomicIsize = AtomicIsize::new(0);
 static SET_FONT: AtomicIsize = AtomicIsize::new(0);
 const ID_STATUS: usize = 900;
+const ID_ORDER_LIST: usize = 910;
 const ID_CLOSE: usize = 999;
 const TIMER_SYNC: usize = 3;
 
@@ -60,7 +61,7 @@ pub(super) unsafe fn open(tile: HWND) {
         CLIP_DEFAULT_PRECIS.0 as u32, CLEARTYPE_QUALITY.0 as u32, 0, w!("Segoe UI"));
     SET_FONT.store(f.0 as isize, Ordering::Relaxed);
 
-    let (cw, ch) = (scale(648), scale(628));
+    let (cw, ch) = (scale(648), scale(648));
     let mut rc = RECT { left: 0, top: 0, right: cw, bottom: ch };
     let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
     let _ = AdjustWindowRectEx(&mut rc, style, false, WINDOW_EX_STYLE(0));
@@ -150,6 +151,13 @@ pub(super) unsafe fn open(tile: HWND) {
 
     push(h, "Fechar", rx + rw - 100, 588, 100, ID_CLOSE);
 
+    // Ordem dos provedores na barra: escolhe um na lista e sobe/desce.
+    group(h, "Ordem na barra", lx, 536, lw, 100);
+    mk(h, w!("LISTBOX"), "", 0x1 | 0x100 | 0x10000 | 0x800000, (lx + 12, 556, 170, 78), ID_ORDER_LIST); // NOTIFY | NOINTEGRALHEIGHT | TABSTOP | BORDER
+    if let Ok(lb) = GetDlgItem(h, ID_ORDER_LIST as i32) { SendMessageW(lb, LB_SETITEMHEIGHT, WPARAM(0), LPARAM(scale(15) as isize)); }
+    push(h, "▲  Subir", lx + 192, 556, 96, ID_ORDER_UP);
+    push(h, "▼  Descer", lx + 192, 596, 96, ID_ORDER_DOWN);
+
     apply_theme(h);
     sync(h);
     SetTimer(h, TIMER_SYNC, 2000, None);
@@ -168,6 +176,27 @@ unsafe fn set_check(h: HWND, id: usize, on: bool) {
 
 unsafe fn set_sel(h: HWND, id: usize, idx: usize) {
     if let Ok(c) = GetDlgItem(h, id as i32) { SendMessageW(c, CB_SETCURSEL, WPARAM(idx), LPARAM(0)); }
+}
+
+static ORDER_SHOWN: std::sync::Mutex<Vec<ProviderId>> = std::sync::Mutex::new(Vec::new());
+/// Seleção a restaurar depois de subir/descer (o item acompanha o provedor movido).
+static ORDER_PENDING: AtomicIsize = AtomicIsize::new(-1);
+
+/// Mantém a lista "Ordem na barra" igual à configuração (só reconstrói quando mudou, preservando a seleção).
+unsafe fn refresh_order_list(h: HWND, cfg: &Config) {
+    let Ok(lb) = GetDlgItem(h, ID_ORDER_LIST as i32) else { return };
+    let order = cfg.ordered_providers();
+    let mut shown = ORDER_SHOWN.lock().unwrap();
+    if *shown == order { return; }
+    let pending = ORDER_PENDING.swap(-1, Ordering::Relaxed);
+    let cur = if pending >= 0 { pending } else { SendMessageW(lb, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0 };
+    SendMessageW(lb, LB_RESETCONTENT, WPARAM(0), LPARAM(0));
+    for id in &order {
+        let name = format!("{}. {}", order.iter().position(|o| o == id).unwrap_or(0) + 1, crate::view::full_name(*id));
+        SendMessageW(lb, LB_ADDSTRING, WPARAM(0), LPARAM(wide0(&name).as_ptr() as isize));
+    }
+    if cur >= 0 { SendMessageW(lb, LB_SETCURSEL, WPARAM(cur as usize), LPARAM(0)); }
+    *shown = order;
 }
 
 /// Reflete a configuração atual nos controles.
@@ -201,6 +230,7 @@ unsafe fn sync(h: HWND) {
     }
     let status = if ctx.shared.account.logged_in() { "Claude: conectado" } else { "Claude: não conectado" };
     if let Ok(s) = GetDlgItem(h, ID_STATUS as i32) { let _ = SetWindowTextW(s, PCWSTR(wide0(status).as_ptr())); }
+    refresh_order_list(h, &cfg);
     let cursor_txt = if ctx.shared.account.cursor_connected() { "Trocar cookie" } else { "Colar cookie" };
     if let Ok(s) = GetDlgItem(h, ID_CURSOR_PASTE as i32) { let _ = SetWindowTextW(s, PCWSTR(wide0(cursor_txt).as_ptr())); }
 }
@@ -233,6 +263,18 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             let tile = CTX.get().map(|c| HWND(c.shared.hwnd.load(Ordering::Relaxed) as *mut _)).unwrap_or_default();
             if id == ID_CLOSE { let _ = DestroyWindow(hwnd); return LRESULT(0); }
             if id == ID_AG_MENU && code == 0 { antigravity_menu(hwnd, HWND(lp.0 as *mut _), tile); return LRESULT(0); }
+            if id == ID_ORDER_UP || id == ID_ORDER_DOWN {
+                if code != 0 { return LRESULT(0); }
+                let sel = GetDlgItem(hwnd, ID_ORDER_LIST as i32).map_or(-1, |lb| SendMessageW(lb, LB_GETCURSEL, WPARAM(0), LPARAM(0)).0);
+                if sel < 0 { return LRESULT(0); } // nada selecionado
+                ORDER_SEL.store(sel, Ordering::Relaxed);
+                ORDER_PENDING.store(sel + if id == ID_ORDER_UP { -1 } else { 1 }, Ordering::Relaxed);
+                SendMessageW(tile, WM_COMMAND, WPARAM(id), LPARAM(0));
+                sync(hwnd);
+                ORDER_PENDING.store(-1, Ordering::Relaxed); // no limite (já primeiro/último) nada mudou: não deixa sobra
+                return LRESULT(0);
+            }
+            if id == ID_ORDER_LIST { return LRESULT(0); } // clique na lista: só seleciona
             let cmd = if COMBOS.contains(&id) {
                 if code != 1 { return LRESULT(0); } // só CBN_SELCHANGE
                 let sel = SendMessageW(HWND(lp.0 as *mut _), CB_GETCURSEL, WPARAM(0), LPARAM(0)).0;
@@ -260,6 +302,13 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
             let _ = GetClientRect(hwnd, &mut rc);
             fill(HDC(wp.0 as *mut c_void), &rc, bg_color(DARK.load(Ordering::Relaxed)));
             LRESULT(1)
+        }
+        WM_CTLCOLORLISTBOX => {
+            let dark = DARK.load(Ordering::Relaxed);
+            let hdc = HDC(wp.0 as *mut c_void);
+            SetTextColor(hdc, fg_color(dark));
+            SetBkColor(hdc, bg_color(dark));
+            LRESULT(BG_BRUSH.load(Ordering::Relaxed))
         }
         WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CTLCOLORDLG => {
             let dark = DARK.load(Ordering::Relaxed);

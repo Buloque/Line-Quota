@@ -48,7 +48,10 @@ fn text(s: impl Into<String>, l: Level) -> Seg { Seg::Text(s.into(), l) }
 /// Linhas a exibir. No modo automático, só os programas abertos; se nenhum estiver aberto,
 /// mostra todos (ou nenhum, com `auto_hide_when_none`).
 pub fn visible_rows<'a>(rows: &'a [ProviderRow], cfg: &Config) -> Vec<&'a ProviderRow> {
-    let enabled: Vec<&ProviderRow> = rows.iter().filter(|r| cfg.provider(r.id).enabled).collect();
+    let order = cfg.ordered_providers();
+    let pos = |id: ProviderId| order.iter().position(|o| *o == id).unwrap_or(usize::MAX);
+    let mut enabled: Vec<&ProviderRow> = rows.iter().filter(|r| cfg.provider(r.id).enabled).collect();
+    enabled.sort_by_key(|r| pos(r.id)); // a ordem escolhida pelo usuário
     if !cfg.ui.auto_mode { return enabled; }
     let open: Vec<&ProviderRow> = enabled.iter().copied().filter(|r| r.running).collect();
     if !open.is_empty() || cfg.ui.auto_hide_when_none { open } else { enabled }
@@ -146,7 +149,10 @@ fn antigravity_segs(u: &Usage, cfg: &Config, out: &mut Vec<Seg>) {
 
 pub fn tooltip(rows: &[ProviderRow], cfg: &Config) -> String {
     let mut s = String::new();
-    for r in rows.iter().filter(|r| cfg.provider(r.id).enabled) {
+    let order = cfg.ordered_providers();
+    let mut shown: Vec<&ProviderRow> = rows.iter().filter(|r| cfg.provider(r.id).enabled).collect();
+    shown.sort_by_key(|r| order.iter().position(|o| *o == r.id).unwrap_or(usize::MAX));
+    for r in shown {
         if !s.is_empty() { s.push('\n'); }
         match &r.result {
             Err(e) => s.push_str(&format!("{}: {e}", label(r.id))),
@@ -663,5 +669,19 @@ mod window_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn bar_follows_the_chosen_provider_order() {
+        let mk = |id| ProviderRow { id, result: Ok(Usage { provider: id, meters: vec![] }), activity: AgentState::Idle, running: true, detail: None, chats: vec![] };
+        let rows = [mk(ProviderId::Claude), mk(ProviderId::Codex), mk(ProviderId::OpenCode), mk(ProviderId::Antigravity)];
+        let mut c = Config::default();
+        c.ui.auto_mode = false;
+        c.antigravity.enabled = true;
+        assert_eq!(visible_ids(&rows, &c), vec![ProviderId::Claude, ProviderId::Codex, ProviderId::OpenCode, ProviderId::Antigravity]);
+        c.ui.provider_order = vec![ProviderId::Antigravity, ProviderId::OpenCode, ProviderId::Codex];
+        assert_eq!(visible_ids(&rows, &c), vec![ProviderId::Antigravity, ProviderId::OpenCode, ProviderId::Codex, ProviderId::Claude]);
+        let tip = tooltip(&rows, &c);
+        assert!(tip.find("Ag").unwrap() < tip.find("OC").unwrap() && tip.find("OC").unwrap() < tip.find("Cl").unwrap());
     }
 }
