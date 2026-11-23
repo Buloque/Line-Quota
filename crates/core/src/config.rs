@@ -277,4 +277,22 @@ activity_style = \"ring\"").unwrap().ui.activity_style, ActivityStyle::Dot);
         let c = Config::default();
         assert_eq!(Config::from_toml(&c.to_toml()).unwrap(), c);
     }
+
+    #[test]
+    fn config_loader_survives_garbage_and_mutations() {
+        let base = Config::default().to_toml();
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = || { seed ^= seed << 13; seed ^= seed >> 7; seed ^= seed << 17; seed };
+        let b = base.as_bytes();
+        for _ in 0..800 {
+            let mut m = b.to_vec();
+            for _ in 0..(1 + next() % 6) {
+                let i = (next() as usize) % m.len();
+                match next() % 3 { 0 => m[i] = next() as u8, 1 => m.truncate(i.max(1)), _ => m.insert(i, b"=[]\"'#
+0-9.".get((next() % 11) as usize).copied().unwrap_or(b'=')) }
+            }
+            let _ = Config::from_toml(&String::from_utf8_lossy(&m)); // pode recusar, nunca entrar em pânico
+        }
+        assert!(Config::from_toml(&base).is_ok());
+    }
 }

@@ -643,4 +643,25 @@ mod window_tests {
         c.antigravity_view.claude_weekly = false;
         assert_eq!(bars(&c), 1);
     }
+
+    #[test]
+    fn extreme_values_never_break_the_view() {
+        use lq_core::model::{Meter, MeterKind};
+        for v in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -5.0, 0.0, 100.0, 250.0, 1e9] {
+            for style in [BarStyle::Horizontal, BarStyle::Vertical, BarStyle::Ring, BarStyle::Blocks] {
+                for (combined, display) in [(true, DisplayMode::Both), (false, DisplayMode::Bar), (true, DisplayMode::Number)] {
+                    let m = |kind| Meter { kind, used_pct: v, resets_at: Some(i64::MAX), estimated: false };
+                    let row = ProviderRow { id: ProviderId::Antigravity, activity: AgentState::Working, running: true, detail: None, chats: vec![],
+                        result: Ok(Usage { provider: ProviderId::Antigravity, meters: vec![m(MeterKind::Gemini), m(MeterKind::Claude), m(MeterKind::Claude5h)] }) };
+                    let mut c = Config::default();
+                    c.antigravity.enabled = true; c.ui.auto_mode = false; c.ui.bar_style = style; c.ui.display = display;
+                    c.antigravity_view.combined = combined;
+                    let segs = segments(&[row.clone()], &c);
+                    assert!(!segs.is_empty());
+                    let _ = tooltip(&[row.clone()], &c);
+                    let _ = flyout_tree(&row, &HashSet::new(), 1_000, 30);
+                }
+            }
+        }
+    }
 }

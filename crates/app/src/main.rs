@@ -87,7 +87,8 @@ impl lq_ui::Account for ClaudeAccount {
 fn cli(args: &[String]) -> bool {
     #[cfg(windows)]
     if setup::run(args) { return true; }
-    let read_stdin = || { let mut s = String::new(); let _ = std::io::stdin().read_to_string(&mut s); s };
+    // Entrada dos hooks limitada a 4 MiB: um programa que alimente o hook sem parar não pode esgotar a memória.
+    let read_stdin = || { let mut s = String::new(); let _ = std::io::stdin().take(4 << 20).read_to_string(&mut s); s };
     match args.first().map(String::as_str) {
         Some("--hook") => {
             let stdin = read_stdin();

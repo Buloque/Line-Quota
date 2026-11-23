@@ -73,6 +73,20 @@ pub fn connected() -> bool { store_path().is_file() }
 
 #[cfg(test)]
 mod tests {
+    /// O cookie vai num cabeçalho HTTP: nada que quebre linha, feche aspas ou separe cookies pode passar.
+    #[test]
+    fn header_injection_and_garbage_are_rejected() {
+        use super::*;
+        let good = "user_01ABCDEFGHIJKLMNOP%3A%3AeyJhbGciOi.payload.sig";
+        assert!(parse_cookie(good).is_ok());
+        let long = "A".repeat(5000);
+        for bad in ["abc\r\nX-Evil: 1", "user_01ABCDEFGHIJKLMNOP%3A%3Aey\nJh", "a b c d e f g h i j k l m n o p", "x;y;z", "Cookie: other=1", "\"\"", "",
+                    "WorkosCursorSessionToken=short", long.as_str(), "user\u{0}01ABCDEFGHIJKLMNOP%3A%3Aeyabc", "<script>alert(1)</script>aaaaaaaaaaaa"] {
+            assert!(!looks_like_session(bad), "aceitou: {bad:?}");
+        }
+        assert_eq!(parse_cookie(&format!("a=b; WorkosCursorSessionToken={good}; c=d")).unwrap(), good);
+    }
+
     use super::*;
 
     const V: &str = "user_01ABCDEF0123456789%3A%3AeyJhbGciOiJIUzI1NiJ9.payload.sig";

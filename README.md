@@ -9,9 +9,9 @@
 ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-nativo-DEA584?logo=rust&logoColor=white)
 ![Licença](https://img.shields.io/badge/licen%C3%A7a-MIT-3FB950)
-![Tamanho](https://img.shields.io/badge/execut%C3%A1vel-2%2C9%20MB-8957E5)
-![Memória](https://img.shields.io/badge/mem%C3%B3ria-~21%20MB-F2CC60)
-![Testes](https://img.shields.io/badge/testes-110%20passando-3FB950)
+![Tamanho](https://img.shields.io/badge/execut%C3%A1vel-3%2C0%20MB-8957E5)
+![Memória](https://img.shields.io/badge/mem%C3%B3ria-~26%20MB-F2CC60)
+![Testes](https://img.shields.io/badge/testes-115%20passando-3FB950)
 
 <img src="docs/images/widget-styles.png" alt="Os quatro formatos de gráfico do widget: barra horizontal, vertical, círculo e blocos (o Antigravity no fim de cada linha)" width="720">
 
@@ -25,7 +25,7 @@
 
 Quem usa agentes de código sabe: o limite acaba no meio de uma tarefa. O Line Quota fica ao lado do relógio, mostra
 quanto já foi gasto de cada janela de uso e avisa **antes** de acabar. Sem janela de navegador, sem painel para
-abrir, sem Electron: é um executável nativo de **2,9 MB**.
+abrir, sem Electron: é um executável nativo de **3 MB**.
 
 | | |
 |---|---|
@@ -73,10 +73,11 @@ Para scripts: `LineQuota-Setup.exe` abre a janela; o programa instalado aceita
 
 | | |
 |---|---|
-| Executável do app | **2,9 MB** (instalador: 3,2 MB, com o app dentro) |
-| Memória em uso | **~21 MB** (set de trabalho), 7 MB privados |
+| Executável do app | **3,0 MB** (instalador: 3,2 MB, com o app dentro) |
+| Memória em uso | **~26 MB** (set de trabalho, até ~34 MB depois de uso), 7 MB privados; estável, sem vazamento de memória, handles ou objetos GDI |
 | CPU parado | **~1%** de um núcleo (leitura local a cada 2 s; rede em outra thread) |
-| Código | **~6 mil linhas** de Rust em 6 crates, **110 testes** automatizados |
+| Hooks | **~60 ms** por chamada (Claude Code, Cursor e Antigravity), sem abrir janela |
+| Código | **~6 mil linhas** de Rust em 6 crates, **115 testes** automatizados |
 | Dependências nativas | Win32 puro (GDI, sem frameworks de interface) |
 | Chamadas de rede | Só `api.anthropic.com` (uso do Claude), `chatgpt.com` (uso do Codex) e `cursor.com` (uso do Cursor, só se você colar o cookie); o Antigravity é lido só localmente (`127.0.0.1`); sem telemetria |
 
@@ -113,6 +114,17 @@ Cada crate faz uma coisa: `core` (modelos, config e alertas), `activity` (hooks 
 - Seu `settings.json` nunca é sobrescrito se não puder ser lido; o backup do original é feito uma única vez.
 - O cookie do Cursor, se colado, fica criptografado com DPAPI (só o seu usuário do Windows abre), nunca aparece em tela, log ou configuração e só é enviado a `cursor.com` (sem seguir redirecionamentos). A área de transferência é limpa assim que ele é capturado; *Limpar* e a desinstalação o apagam. O histórico da área de transferência do Windows (Win+V), se ligado, pode guardar a cópia feita no navegador: apague o item ali.
 - Nada sai do computador além das consultas de uso acima.
+
+## Testes e verificações
+
+Antes de cada versão: `cargo test --workspace` (**115 testes**), `cargo clippy` (sem erros) e uma bateria manual no programa real.
+
+- **Entradas hostis:** os hooks recebem nomes de sessão com caminho (`../../x`), textos de 200 mil caracteres, JSON de tipo errado, lixo binário e 30 MB de entrada. Nada sai da pasta de atividade, os arquivos gravados ficam pequenos (textos cortados) e a leitura da entrada é limitada a 4 MiB.
+- **Fuzz dos leitores:** todo leitor de resposta ou credencial (Claude, Codex, Cursor, Antigravity, cookie, login) é alimentado com amostras truncadas, com bytes trocados e com lixo aleatório; o `config.toml` também. Pode recusar, nunca trava.
+- **Concorrência:** 60 hooks simultâneos na mesma sessão: o arquivo de estado é gravado de forma atômica e nenhuma leitura o viu pela metade.
+- **Desempenho:** ~1% de CPU parado, ~26 MB, 6-7 threads, sem portas abertas; 36 ciclos de trabalhando/ocioso sem crescer memória, handles ou objetos GDI.
+- **Segredos:** o cookie do Cursor só existe criptografado (DPAPI) e nenhum token aparece no código nem no histórico do Git; o token local do Antigravity é só lido para falar com `127.0.0.1`.
+- **Binário:** ASLR, ASLR de alta entropia e DEP ligados.
 
 ## Desenvolvimento
 

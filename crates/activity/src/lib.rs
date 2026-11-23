@@ -147,7 +147,7 @@ fn handle_event(dir: &Path, tool: &str, v: &Value, now: i64) -> std::io::Result<
             o["state"] = json!(state_str(s));
             o["ts"] = json!(now);
             if let Some(cwd) = v["cwd"].as_str() {
-                o["project"] = lq_core::model::project_from_dir(cwd).map_or(Value::Null, |n| json!(n));
+                o["project"] = lq_core::model::project_from_dir(cwd).map_or(Value::Null, |n| json!(clip(&n, 64)));
             }
             // Nome do chat (o que aparece no Claude Code): lido do transcript só em eventos raros.
             if tool == "claude" && matches!(event, "UserPromptSubmit" | "Stop") {
@@ -166,7 +166,7 @@ fn handle_event(dir: &Path, tool: &str, v: &Value, now: i64) -> std::io::Result<
                 }
                 "PostToolUse" => {
                     if let Some(t) = v["tool_name"].as_str() {
-                        o["tool"] = json!(t);
+                        o["tool"] = json!(clip(t, 64));
                         o["target"] = tool_target(&v["tool_input"]).map_or(Value::Null, |t| json!(t));
                         o["tool_ts"] = json!(now);
                     }
@@ -179,7 +179,14 @@ fn handle_event(dir: &Path, tool: &str, v: &Value, now: i64) -> std::io::Result<
                 "Stop" => { o["notice"] = Value::Null; }
                 _ => {}
             }
-            std::fs::write(path, o.to_string())
+            // Gravação atômica: quem lê (o widget, a cada 2 s) nunca vê o arquivo pela metade, mesmo com vários hooks juntos.
+            let tmp = path.with_file_name(format!(".{}.{}.tmp", path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(), std::process::id()));
+            std::fs::write(&tmp, o.to_string()).and_then(|_| {
+                // O leitor pode ter o arquivo aberto neste instante: tenta de novo algumas vezes.
+                let mut r = std::fs::rename(&tmp, &path);
+                for _ in 0..4 { if r.is_ok() { break; } std::thread::sleep(std::time::Duration::from_millis(8)); r = std::fs::rename(&tmp, &path); }
+                r
+            }).inspect_err(|_| { let _ = std::fs::remove_file(&tmp); })
         }
     }
 }
@@ -336,6 +343,41 @@ mod tests {
         let x = detail(&d, "claude", 120).unwrap();
         assert_eq!((x.project.as_deref(), x.prompt.as_deref()), (Some("Meu Proj"), Some("faz isso")));
         assert_eq!((x.tool.as_deref(), x.target.as_deref(), x.since), (Some("Edit"), Some("win.rs"), Some(100)));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Entradas hostis: nomes de sessão com caminho, textos enormes, tipos errados. Nada sai da pasta de atividade.
+    #[test]
+    fn hostile_hook_input_stays_inside_the_activity_folder() {
+        let d = tmp("hostile");
+        let big = "A".repeat(200_000);
+        let sessions = ["../../evil", "..\\..\\evil", "a/b/c", "C:\\Windows\\x", "con", "nul\u{0}byte", "../", "", big.as_str()];
+        for (i, sid) in sessions.iter().enumerate() {
+            let now = 1000 + i as i64;
+            let claude = json!({"hook_event_name": "UserPromptSubmit", "session_id": sid, "prompt": big, "cwd": big});
+            handle_claude_hook(&d, &claude.to_string(), now).unwrap();
+            let cursor = json!({"hook_event_name": "beforeSubmitPrompt", "conversation_id": sid, "prompt": big, "workspace_roots": [big]});
+            handle_cursor_hook(&d, &cursor.to_string(), now).unwrap();
+            let ag = json!({"hookEventName": "PostToolUse", "conversationId": sid, "lastUserInput": big, "toolCall": {"name": big, "args": {"CommandLine": big}}});
+            handle_antigravity_hook(&d, &ag.to_string(), now).unwrap();
+        }
+        // formatos errados e JSON estranho
+        for junk in ["null", "[]", "42", "\"x\"", "{\"hook_event_name\":5}", "{\"hookEventName\":{\"a\":1}}", "[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]", "\u{feff}{}", "{\"toolCall\":\"x\"}"] {
+            handle_claude_hook(&d, junk, 1).unwrap();
+            handle_cursor_hook(&d, junk, 1).unwrap();
+            handle_antigravity_hook(&d, junk, 1).unwrap();
+        }
+        // tudo o que foi gravado está em <d>/activity, com nome simples e conteúdo limitado
+        let root = d.canonicalize().unwrap();
+        for e in std::fs::read_dir(d.join("activity")).unwrap().flatten() {
+            let p = e.path().canonicalize().unwrap();
+            assert!(p.starts_with(&root), "{p:?} saiu da pasta");
+            let n = e.file_name().to_string_lossy().to_string();
+            assert!(n.chars().all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c)) && n.len() < 100, "nome suspeito: {n}");
+            assert!(e.metadata().unwrap().len() < 10_000, "arquivo grande demais: {n}");
+        }
+        // nada foi criado ao lado da pasta (o "evil" do caminho relativo)
+        assert!(!d.parent().unwrap().join("evil").exists() && !d.join("evil").exists());
         let _ = std::fs::remove_dir_all(&d);
     }
 
