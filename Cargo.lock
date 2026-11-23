@@ -292,13 +292,21 @@ dependencies = [
 
 [[package]]
 name = "line-quota"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "lq-activity",
  "lq-core",
  "lq-providers",
  "lq-ui",
  "serde_json",
+ "winresource",
+]
+
+[[package]]
+name = "line-quota-setup"
+version = "0.2.0"
+dependencies = [
+ "windows",
  "winresource",
 ]
 
@@ -316,7 +324,7 @@ checksum = "5d15f86d12da44cd8d4ec3c73984537eb7f4cadcb9776a575a0a8a05ca11005c"
 
 [[package]]
 name = "lq-activity"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "lq-core",
  "serde_json",
@@ -325,7 +333,7 @@ dependencies = [
 
 [[package]]
 name = "lq-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "toml 0.8.23",
@@ -333,7 +341,7 @@ dependencies = [
 
 [[package]]
 name = "lq-providers"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "lq-activity",
  "lq-core",
@@ -345,7 +353,7 @@ dependencies = [
 
 [[package]]
 name = "lq-ui"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "lq-core",
  "windows",

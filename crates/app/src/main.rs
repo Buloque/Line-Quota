@@ -100,9 +100,60 @@ fn cli(args: &[String]) -> bool {
     }
 }
 
+/// Modo `--demo`: dados fictícios e config temporária (nada do usuário). Serve para gerar as imagens da documentação.
+mod demo {
+    use lq_core::model::{AgentDetail, AgentState, ChatInfo, Meter, MeterKind, ProviderId, Usage};
+    use lq_ui::view::ProviderRow;
+
+    fn meter(kind: MeterKind, used_pct: f32, resets_in: i64, now: i64) -> Meter {
+        Meter { kind, used_pct, resets_at: Some(now + resets_in), estimated: false }
+    }
+
+    fn chat(id: &str, project: Option<&str>, title: &str, state: AgentState, prompt: &str, tool: Option<(&str, &str)>, now: i64) -> ChatInfo {
+        ChatInfo {
+            id: id.into(), project: project.map(str::to_string), title: title.into(), state,
+            detail: AgentDetail {
+                project: project.map(str::to_string), prompt: Some(prompt.into()),
+                tool: tool.map(|t| t.0.into()), target: tool.map(|t| t.1.into()), tool_ts: Some(now - 4),
+                since: Some(now - 95), updated: Some(now - if state == AgentState::Idle { 600 } else { 2 }), ..Default::default()
+            },
+        }
+    }
+
+    pub fn rows(now: i64) -> Vec<ProviderRow> {
+        let claude = Usage { provider: ProviderId::Claude, meters: vec![
+            meter(MeterKind::FiveHour, 63.0, 5400, now), meter(MeterKind::Weekly, 41.0, 4 * 86400, now)] };
+        let codex = Usage { provider: ProviderId::Codex, meters: vec![meter(MeterKind::Monthly, 28.0, 20 * 86400, now)] };
+        vec![
+            ProviderRow {
+                id: ProviderId::Claude, result: Ok(claude), activity: AgentState::Working, running: true, detail: None,
+                chats: vec![
+                    chat("a", Some("meu-app"), "Corrigir o login", AgentState::Working, "faça o login aceitar e-mail e senha", Some(("Edit", "auth.rs")), now),
+                    chat("b", Some("meu-app"), "Refatorar o parser", AgentState::Idle, "separe o parser em módulos", Some(("Bash", "cargo test")), now),
+                    chat("c", None, "Dúvida sobre lifetimes", AgentState::Idle, "quando usar 'static?", None, now),
+                ],
+            },
+            ProviderRow { id: ProviderId::Codex, result: Ok(codex), activity: AgentState::Idle, running: true, detail: None, chats: vec![] },
+            ProviderRow { id: ProviderId::OpenCode, result: Ok(Usage { provider: ProviderId::OpenCode, meters: vec![] }),
+                activity: AgentState::Idle, running: true, detail: None, chats: vec![] },
+        ]
+    }
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if cli(&args) { return; }
+    let demo = args.iter().any(|a| a == "--demo");
+    if demo {
+        // Config própria na pasta temporária (nunca mexe na do usuário); `--demo` só roda com dados fictícios.
+        let path = std::env::temp_dir().join("LineQuotaDemo").join("config.toml");
+        let cfg = std::fs::read_to_string(&path).ok().and_then(|s| Config::from_toml(&s).ok()).unwrap_or_default();
+        let shared = Shared::new(cfg, path, std::sync::Arc::new(ClaudeAccount));
+        *shared.rows.lock().unwrap() = demo::rows(now_secs());
+        let (tx, _rx) = mpsc::channel::<()>();
+        let _ = win::run(shared, tx);
+        return;
+    }
     if !win::single_instance() { return; }
 
     let cfg = load_config();

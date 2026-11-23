@@ -5,7 +5,7 @@ use crate::install;
 use lq_ui::win;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 const EXE_NAME: &str = "line-quota.exe";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -53,7 +53,7 @@ fn report(quiet: bool, title: &str, text: &str) {
 
 /// Instala (ou atualiza) o app por usuário. Claude Code, Codex e OpenCode são opcionais:
 /// problemas na integração com o Claude viram aviso, nunca abortam a instalação.
-pub fn install_app(quiet: bool, autostart: bool) {
+pub fn install_app(quiet: bool, autostart: bool, launch: bool) {
     let dir = install_dir();
     let target = dir.join(EXE_NAME);
     let result = (|| -> Result<Vec<String>, String> {
@@ -74,7 +74,8 @@ pub fn install_app(quiet: bool, autostart: bool) {
     })();
     match result {
         Ok(log) => {
-            let _ = Command::new(&target).current_dir(&dir).creation_flags(DETACHED | CREATE_NO_WINDOW).spawn();
+            // Sem herdar stdin/stdout/stderr: quem chamou (o instalador) espera o EOF desses pipes.
+            if launch { let _ = Command::new(&target).current_dir(&dir).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).creation_flags(DETACHED | CREATE_NO_WINDOW).spawn(); }
             let notes: String = log.iter().filter(|l| l.starts_with("Aviso") || l.starts_with("Claude Code não")).map(|l| format!("\n\n{l}")).collect();
             report(quiet, "Line Quota",
                 &format!("Instalado!\n\nO widget já está na barra de tarefas.\n\nPasta: {}\nInício com o Windows: {}{notes}\n\nPara remover: Configurações do Windows > Aplicativos instalados > Line Quota.",
@@ -96,7 +97,7 @@ pub fn install_wizard() {
     let heading = if update { "Atualizar o Line Quota" } else { "Instalar o Line Quota" };
     if let Some(autostart) = win::confirm_with_check("Line Quota — Instalação", heading, &text,
         if update { "Atualizar" } else { "Instalar" }, "Iniciar com o Windows", true) {
-        install_app(false, autostart);
+        install_app(false, autostart, true);
     }
 }
 
@@ -126,7 +127,7 @@ pub fn uninstall_app(quiet: bool, purge: bool) {
     if !d.contains(['%', '^', '&', '"', '!', '|', '<', '>']) {
         let _ = Command::new(system_exe("cmd.exe"))
             .raw_arg(format!("/C ping -n 3 127.0.0.1 >nul & rmdir /S /Q \"{d}\""))
-            .creation_flags(DETACHED | CREATE_NO_WINDOW).spawn();
+            .stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).creation_flags(DETACHED | CREATE_NO_WINDOW).spawn();
     }
     report(quiet, "Line Quota",
         &format!("Line Quota removido.{}", if purge { String::new() } else { format!("\n\nSuas configurações foram mantidas em {}.", cfg.display()) }));
@@ -156,8 +157,8 @@ pub fn is_setup_exe() -> bool {
 pub fn run(args: &[String]) -> bool {
     let has = |f: &str| args.iter().any(|a| a == f);
     match args.first().map(String::as_str) {
-        Some("--install") if has("--quiet") => { install_app(true, !has("--no-autostart")); true }
-        Some("--install") => { if has("--no-autostart") { install_app(false, false) } else { install_wizard() } true }
+        Some("--install") if has("--quiet") => { install_app(true, !has("--no-autostart"), !has("--no-launch")); true }
+        Some("--install") => { if has("--no-autostart") { install_app(false, false, true) } else { install_wizard() } true }
         Some("--uninstall") if has("--quiet") => { uninstall_app(true, has("--purge")); true }
         Some("--uninstall") => { uninstall_wizard(has("--purge")); true }
         None if is_setup_exe() => { install_wizard(); true }

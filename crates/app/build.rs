@@ -7,6 +7,8 @@ fn main() {
         res.set_manifest_file("app.manifest");
         res.set("FileDescription", "Line Quota");
         res.set("ProductName", "Line Quota");
+        res.set("CompanyName", "Line Quota");
+        res.set("LegalCopyright", "MIT License");
         res.set("InternalName", "line-quota");
         res.set("OriginalFilename", "line-quota.exe");
         res.compile().expect("falha ao compilar os recursos do Windows (rc.exe)");

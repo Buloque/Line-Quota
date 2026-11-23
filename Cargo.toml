@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["crates/core", "crates/activity", "crates/providers", "crates/ui", "crates/app"]
+members = ["crates/core", "crates/activity", "crates/providers", "crates/ui", "crates/app", "crates/installer"]
 
 [workspace.package]
 edition = "2021"
-version = "0.1.0"
+version = "0.2.0"
 license = "MIT"
 
 [workspace.dependencies]
