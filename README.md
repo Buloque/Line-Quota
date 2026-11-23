@@ -11,7 +11,7 @@
 ![Licença](https://img.shields.io/badge/licen%C3%A7a-MIT-3FB950)
 ![Tamanho](https://img.shields.io/badge/execut%C3%A1vel-2%2C9%20MB-8957E5)
 ![Memória](https://img.shields.io/badge/mem%C3%B3ria-~21%20MB-F2CC60)
-![Testes](https://img.shields.io/badge/testes-95%20passando-3FB950)
+![Testes](https://img.shields.io/badge/testes-103%20passando-3FB950)
 
 <img src="docs/images/widget-styles.png" alt="Os quatro formatos de gráfico do widget: barra horizontal, vertical, círculo e blocos" width="720">
 
@@ -34,6 +34,7 @@ abrir, sem Electron: é um executável nativo de **2,9 MB**.
 | 🔔 **Avisos úteis** | Notificações do Windows ao passar de 80/90/95%, quando o limite renova, quando uma tarefa termina ou precisa de você. |
 | 🎨 **Do seu jeito** | Barra horizontal, vertical, círculo ou blocos; com ou sem número; com ou sem rótulos; ícone, texto ou nada; fundo transparente; qualquer fonte. |
 | 🪄 **Modo automático** | Mostra só o que está aberto e some quando nada está rodando. |
+| 🧩 **Cursor (experimental)** | Mostra se o Cursor está trabalhando, pelos hooks oficiais dele. O **limite mensal** do plano aparece se você colar o cookie `WorkosCursorSessionToken` do painel (*Configurações → Provedores → Colar cookie*: abre o painel do Cursor, mostra o passo a passo com uma contagem de 3 minutos e detecta o cookie assim que você o copia); o Cursor não tem API oficial de uso nem login para apps de terceiros. Fica desligado até você ligar (ou ser encontrado na primeira execução). |
 | 🔒 **Fica onde você pôs** | A posição vem travada: um clique sem querer não move o widget. |
 
 ## Veja
@@ -58,7 +59,7 @@ abrir, sem Electron: é um executável nativo de **2,9 MB**.
 
 - **Atualizar é o mesmo caminho:** rode o instalador novo por cima. Ele mostra *"Atualizar da versão X para Y"*, troca o programa e mantém suas configurações.
 - **Sem administrador.** Instala em `%LOCALAPPDATA%\Programs\LineQuota`.
-- **Nenhum agente é obrigatório.** Na primeira execução só ficam ligados os que existem no computador; o hook do Claude Code só é configurado se o Claude Code estiver instalado (com backup do seu `settings.json`).
+- **Nenhum agente é obrigatório.** Na primeira execução só ficam ligados os que existem no computador; os hooks do Claude Code e do Cursor só são configurados se eles estiverem instalados, mesclados com os seus (com backup de `settings.json` e `hooks.json`). Se instalar o Cursor depois, rode o instalador de novo para configurar o hook dele.
 - **Desinstalar:** *Configurações do Windows → Aplicativos instalados → Line Quota*. O desinstalador pergunta se deve apagar também as configurações (**purge**).
 
 > **Aviso do SmartScreen:** o executável ainda não é assinado digitalmente, então o Windows pode mostrar "O Windows protegeu seu PC".
@@ -74,9 +75,9 @@ Para scripts: `LineQuota-Setup.exe` abre a janela; o programa instalado aceita
 | Executável do app | **2,9 MB** (instalador: 3,2 MB, com o app dentro) |
 | Memória em uso | **~21 MB** (set de trabalho), 7 MB privados |
 | CPU parado | **~1%** de um núcleo (leitura local a cada 2 s; rede em outra thread) |
-| Código | **~6 mil linhas** de Rust em 6 crates, **95 testes** automatizados |
+| Código | **~6 mil linhas** de Rust em 6 crates, **103 testes** automatizados |
 | Dependências nativas | Win32 puro (GDI, sem frameworks de interface) |
-| Chamadas de rede | Só `api.anthropic.com` (uso do Claude) e `chatgpt.com` (uso do Codex); sem telemetria |
+| Chamadas de rede | Só `api.anthropic.com` (uso do Claude), `chatgpt.com` (uso do Codex) e `cursor.com` (uso do Cursor, só se você colar o cookie); sem telemetria |
 
 ## Como funciona
 
@@ -86,6 +87,7 @@ flowchart LR
         CC[Claude Code] -- hooks e statusLine --> ACT
         CX[Codex] -- sessões .jsonl --> PRV
         OC[OpenCode] -- banco SQLite --> PRV
+        CU[Cursor] -- hooks --> ACT
     end
     ACT[atividade<br/>quem trabalha agora] --> APP
     PRV[provedores<br/>limites e chats] --> APP
@@ -94,8 +96,8 @@ flowchart LR
     APP --> N[alertas e notificações]
 ```
 
-Cada crate faz uma coisa: `core` (modelos, config e alertas), `activity` (hooks do Claude e processos abertos),
-`providers` (Claude, Codex, OpenCode), `ui` (desenho e configurações), `app` (orquestração e instalação) e `installer`
+Cada crate faz uma coisa: `core` (modelos, config e alertas), `activity` (hooks do Claude e do Cursor, e processos abertos),
+`providers` (Claude, Codex, OpenCode, Cursor), `ui` (desenho e configurações), `app` (orquestração e instalação) e `installer`
 (esta janela de instalação, com o app embutido).
 
 ## Privacidade e segurança
@@ -103,8 +105,10 @@ Cada crate faz uma coisa: `core` (modelos, config e alertas), `activity` (hooks 
 - Os tokens do login do widget ficam **criptografados com DPAPI** do Windows, gravados de forma atômica; o login usa OAuth com PKCE e valida o `state`.
 - O token do Codex só é enviado a endereços **HTTPS** (ou `localhost`); a URL do `config.toml` é validada.
 - O hook que o Claude Code chama só lê arquivos `.jsonl` dentro da pasta do próprio Claude e sanitiza o nome dos arquivos que grava.
+- O hook do Cursor (`~/.cursor/hooks.json`) nunca bloqueia nada: responde sempre que pode seguir e só grava o estado (trabalhando/ocioso), o projeto e o último pedido, localmente.
 - Seu `settings.json` nunca é sobrescrito se não puder ser lido; o backup do original é feito uma única vez.
-- Nada sai do computador além das duas consultas de uso acima.
+- O cookie do Cursor, se colado, fica criptografado com DPAPI (só o seu usuário do Windows abre), nunca aparece em tela, log ou configuração e só é enviado a `cursor.com` (sem seguir redirecionamentos). A área de transferência é limpa assim que ele é capturado; *Limpar* e a desinstalação o apagam. O histórico da área de transferência do Windows (Win+V), se ligado, pode guardar a cópia feita no navegador: apague o item ali.
+- Nada sai do computador além das consultas de uso acima.
 
 ## Desenvolvimento
 

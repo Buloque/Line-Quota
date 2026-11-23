@@ -152,21 +152,25 @@ pub struct Config {
     pub claude: ProviderConfig,
     pub codex: ProviderConfig,
     pub opencode: ProviderConfig,
+    /// Cursor: só atividade (sem limites); desligado até o usuário ligar ou o app o encontrar instalado.
+    pub cursor: ProviderConfig,
     pub alerts: AlertConfig,
     pub ui: UiConfig,
 }
 
-const PROCESS_DEFAULTS: [(ProviderId, &[&str]); 3] = [
+const PROCESS_DEFAULTS: [(ProviderId, &[&str]); 4] = [
     (ProviderId::Claude, &["claude.exe"]),
     (ProviderId::Codex, &["codex.exe"]),
     (ProviderId::OpenCode, &["opencode.exe", "opencode-cli.exe"]),
+    (ProviderId::Cursor, &["cursor.exe"]),
 ];
 
 impl Default for Config {
     fn default() -> Self {
         let mut c = Self {
             account: AccountConfig::default(), claude: ProviderConfig::default(), codex: ProviderConfig::default(),
-            opencode: ProviderConfig::default(), alerts: AlertConfig::default(), ui: UiConfig::default(),
+            opencode: ProviderConfig::default(), cursor: ProviderConfig { enabled: false, ..Default::default() },
+            alerts: AlertConfig::default(), ui: UiConfig::default(),
         };
         c.fill_defaults();
         c
@@ -179,10 +183,11 @@ impl Config {
             ProviderId::Claude => &self.claude,
             ProviderId::Codex => &self.codex,
             ProviderId::OpenCode => &self.opencode,
+            ProviderId::Cursor => &self.cursor,
         }
     }
 
-    pub fn providers_mut(&mut self) -> [&mut ProviderConfig; 3] { [&mut self.claude, &mut self.codex, &mut self.opencode] }
+    pub fn providers_mut(&mut self) -> [&mut ProviderConfig; 4] { [&mut self.claude, &mut self.codex, &mut self.opencode, &mut self.cursor] }
 
     /// Preenche os nomes de processo padrão quando o arquivo de config antigo não os tem.
     pub fn fill_defaults(&mut self) {
@@ -191,6 +196,7 @@ impl Config {
                 ProviderId::Claude => &mut self.claude,
                 ProviderId::Codex => &mut self.codex,
                 ProviderId::OpenCode => &mut self.opencode,
+                ProviderId::Cursor => &mut self.cursor,
             };
             if p.processes.is_empty() { p.processes = names.iter().map(|s| s.to_string()).collect(); }
         }

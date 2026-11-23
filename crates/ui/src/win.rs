@@ -16,10 +16,10 @@ use std::sync::{Arc, Mutex, OnceLock};
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
-use windows::Win32::System::DataExchange::{CloseClipboard, GetClipboardData, OpenClipboard};
+use windows::Win32::System::DataExchange::{CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData};
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::System::Memory::{GlobalLock, GlobalUnlock};
+use windows::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
 use windows::Win32::System::Registry::{RegDeleteKeyValueW, RegDeleteKeyW, RegGetValueW, RegSetKeyValueW, HKEY_CURRENT_USER, REG_DWORD, REG_SZ, RRF_RT_REG_DWORD, RRF_RT_REG_SZ};
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
 use windows::Win32::System::Threading::CreateMutexW;
@@ -33,6 +33,7 @@ const WM_TRAY: u32 = WM_APP + 2;
 const WM_TOAST: u32 = WM_APP + 3;
 const TIMER_POS: usize = 1;
 mod settings;
+mod cookie_guide;
 
 // Alertas: toggles e presets de limiar.
 const ID_ALERT_ENABLED: usize = 100;
@@ -54,7 +55,7 @@ const ID_SHOW_ACTIVITY: usize = 32;
 const ID_SHOW_REMAINING: usize = 33;
 const ID_TRANSPARENT: usize = 34;
 const ID_TAGS: usize = 35; // rótulos 5h / 7d / 30d
-const ID_PROVIDER: usize = 40; // +0 claude, +1 codex, +2 opencode
+const ID_PROVIDER: usize = 40; // +0 claude, +1 codex, +2 opencode, +3 cursor
 const ID_ANCHOR: usize = 50; // +0 bandeja, +1 início, +2 centro
 const ID_AUTO: usize = 55;
 const ID_AUTO_HIDE: usize = 56;
@@ -62,6 +63,8 @@ const ID_MONITOR: usize = 60; // +0 automático, +1.. monitor N
 const ID_CLAUDE_LOGIN: usize = 70;
 const ID_CLAUDE_PASTE: usize = 71;
 const ID_CLAUDE_LOGOUT: usize = 72;
+const ID_CURSOR_PASTE: usize = 73;
+const ID_CURSOR_CLEAR: usize = 74;
 const ID_FONT: usize = 200; // +i da lista FONTS
 const FONTS: [&str; 7] = ["Segoe UI Variable Text", "Segoe UI", "Bahnschrift", "Cascadia Mono", "Consolas", "Calibri", "Trebuchet MS"];
 const ID_CHATWIN: usize = 210; // +i de CHAT_WINDOWS
@@ -411,6 +414,27 @@ unsafe fn draw_icon(hdc: HDC, id: ProviderId, x: i32, cy: i32, s: i32, light: bo
             SelectObject(hdc, op);
             let _ = DeleteObject(b);
             let _ = DeleteObject(np);
+        }
+        ProviderId::Cursor => {
+            // Hexágono com três arestas internas (cubo estilizado), na cor de contraste do tema.
+            let (outer, edge) = if light { (0x00303030, 0x00E0E0E0) } else { (0x00E0E0E0, 0x00202020) };
+            let pt = |k: i32| {
+                let a = (-90.0 + 60.0 * k as f64).to_radians();
+                POINT { x: cx + (r as f64 * a.cos()).round() as i32, y: cy + (r as f64 * a.sin()).round() as i32 }
+            };
+            let hex: Vec<POINT> = (0..6).map(pt).collect();
+            let b = CreateSolidBrush(COLORREF(outer));
+            let np = pen(COLORREF(outer), 1);
+            let (ob, op) = (SelectObject(hdc, b), SelectObject(hdc, np));
+            let _ = Polygon(hdc, &hex);
+            SelectObject(hdc, ob);
+            let ep = pen(COLORREF(edge), s / 12);
+            SelectObject(hdc, ep);
+            for k in [1, 3, 5] { line(hdc, (cx, cy), (hex[k as usize].x, hex[k as usize].y)); }
+            SelectObject(hdc, op);
+            let _ = DeleteObject(b);
+            let _ = DeleteObject(np);
+            let _ = DeleteObject(ep);
         }
     }
 }
@@ -836,6 +860,29 @@ fn read_clipboard() -> String {
     }
 }
 
+/// Copia um texto (sem segredo) para a área de transferência.
+fn write_clipboard(text: &str) {
+    unsafe {
+        if OpenClipboard(None).is_err() { return; }
+        let _ = EmptyClipboard();
+        let t = wide0(text);
+        if let Ok(h) = GlobalAlloc(GMEM_MOVEABLE, t.len() * 2) {
+            let p = GlobalLock(h) as *mut u16;
+            if !p.is_null() {
+                std::ptr::copy_nonoverlapping(t.as_ptr(), p, t.len());
+                let _ = GlobalUnlock(h);
+                let _ = SetClipboardData(13, HANDLE(h.0));
+            }
+        }
+        let _ = CloseClipboard();
+    }
+}
+
+/// Esvazia a área de transferência (depois de capturar um segredo copiado pelo usuário).
+fn clear_clipboard() {
+    unsafe { if OpenClipboard(None).is_ok() { let _ = EmptyClipboard(); let _ = CloseClipboard(); } }
+}
+
 /// Lê o código da área de transferência, conclui o login e avisa o resultado (roda em thread própria).
 fn paste_code(shared: Arc<Shared>) {
     std::thread::spawn(move || {
@@ -889,6 +936,33 @@ unsafe fn apply_command(hwnd: HWND, id: usize) -> bool {
         }
         ID_CLAUDE_PASTE => { paste_code(sh.clone()); return false; }
         ID_CLAUDE_LOGOUT => { sh.account.logout(); request_refresh(); return true; }
+        ID_CURSOR_PASTE => {
+            let shared = sh.clone();
+            std::thread::spawn(move || {
+                // Já copiou o cookie? Salva direto. Senão abre o painel e fica de olho na área de transferência.
+                let mut found = Some(read_clipboard()).filter(|c| shared.account.cursor_looks_like_cookie(c));
+                if found.is_none() {
+                    open_url("https://cursor.com/dashboard");
+                    found = cookie_guide::run();
+                }
+                match found {
+                    Some(c) => {
+                        let r = shared.account.cursor_set_cookie(&c);
+                        // O segredo não fica na área de transferência (nem o do usuário, nem a cópia em memória).
+                        if shared.account.cursor_looks_like_cookie(&read_clipboard()) { clear_clipboard(); }
+                        match r {
+                            Ok(()) => message("Cursor", "Cookie salvo! O limite aparece em instantes."),
+                            Err(e) => message("Cursor", &e),
+                        }
+                    }
+                    None => message("Cursor", "Não detectei o cookie. Clique em Colar cookie para tentar de novo."),
+                }
+                request_refresh();
+                shared.notify();
+            });
+            return false;
+        }
+        ID_CURSOR_CLEAR => { sh.account.cursor_clear(); request_refresh(); return true; }
         ID_QUIT => { let _ = DestroyWindow(hwnd); return false; }
         ID_RELOAD => {
             if let Ok(txt) = std::fs::read_to_string(&sh.config_path) {
@@ -927,6 +1001,7 @@ unsafe fn apply_command(hwnd: HWND, id: usize) -> bool {
             ID_PROVIDER => c.claude.enabled = !c.claude.enabled,
             x if x == ID_PROVIDER + 1 => c.codex.enabled = !c.codex.enabled,
             x if x == ID_PROVIDER + 2 => c.opencode.enabled = !c.opencode.enabled,
+            x if x == ID_PROVIDER + 3 => c.cursor.enabled = !c.cursor.enabled,
             ID_ALERT_ENABLED => c.alerts.enabled = !c.alerts.enabled,
             ID_ALERT_TOAST => c.alerts.toast = !c.alerts.toast,
             ID_ALERT_SOUND => c.alerts.sound = !c.alerts.sound,
@@ -949,7 +1024,7 @@ unsafe fn apply_command(hwnd: HWND, id: usize) -> bool {
         }
     }
     sh.save();
-    if (ID_PROVIDER..ID_PROVIDER + 3).contains(&id) { request_refresh(); } // provedor recém-ligado: busca já os limites
+    if (ID_PROVIDER..ID_PROVIDER + 4).contains(&id) { request_refresh(); } // provedor recém-ligado: busca já os limites
     true
 }
 

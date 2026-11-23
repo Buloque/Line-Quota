@@ -19,18 +19,20 @@ fn config_path() -> PathBuf {
 }
 
 /// Quais agentes parecem instalados: pastas de dados do Claude Code, Codex e OpenCode.
-fn detect_installed() -> [bool; 3] {
+fn detect_installed() -> [bool; 4] {
     let home = PathBuf::from(std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default());
     let opencode = std::env::var("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|_| home.join(".local").join("share")).join("opencode");
-    [home.join(".claude").is_dir(), home.join(".codex").is_dir(), opencode.is_dir()]
+    let cursor = home.join(".cursor").is_dir() || PathBuf::from(std::env::var("APPDATA").unwrap_or_default()).join("Cursor").is_dir();
+    [home.join(".claude").is_dir(), home.join(".codex").is_dir(), opencode.is_dir(), cursor]
 }
 
 /// Primeira execução: liga só os agentes encontrados (nenhum é obrigatório). Se não achar nenhum, mantém todos.
-fn apply_detected(c: &mut Config, found: [bool; 3]) {
+fn apply_detected(c: &mut Config, found: [bool; 4]) {
     if found.iter().any(|f| *f) {
         c.claude.enabled = found[0];
         c.codex.enabled = found[1];
         c.opencode.enabled = found[2];
+        c.cursor.enabled = found[3];
     }
 }
 
@@ -55,6 +57,7 @@ fn providers() -> Vec<Box<dyn Provider>> {
         Box::new(lq_providers::claude::Claude::new(lq_activity::data_dir())),
         Box::new(lq_providers::codex::Codex),
         Box::new(lq_providers::opencode::OpenCode::new()),
+        Box::new(lq_providers::cursor::Cursor::new(lq_activity::data_dir())),
     ]
 }
 
@@ -70,6 +73,10 @@ impl lq_ui::Account for ClaudeAccount {
     fn login_url(&self, full_scope: bool) -> Result<String, String> { lq_providers::claude_auth::begin(full_scope) }
     fn complete(&self, pasted: &str) -> Result<(), String> { lq_providers::claude_auth::complete(pasted, now_secs() * 1000) }
     fn logout(&self) { lq_providers::claude_auth::logout() }
+    fn cursor_connected(&self) -> bool { lq_providers::cursor_auth::connected() }
+    fn cursor_set_cookie(&self, pasted: &str) -> Result<(), String> { lq_providers::cursor_auth::save(pasted) }
+    fn cursor_clear(&self) { lq_providers::cursor_auth::clear() }
+    fn cursor_looks_like_cookie(&self, t: &str) -> bool { lq_providers::cursor_auth::looks_like_session(t) }
 }
 
 /// Modos de linha de comando usados pelo Claude Code (hooks/statusLine) e pela instalação.
@@ -79,7 +86,17 @@ fn cli(args: &[String]) -> bool {
     if setup::run(args) { return true; }
     let read_stdin = || { let mut s = String::new(); let _ = std::io::stdin().read_to_string(&mut s); s };
     match args.first().map(String::as_str) {
-        Some("--hook") => { let _ = lq_activity::handle_claude_hook(&lq_activity::data_dir(), &read_stdin(), now_secs()); true }
+        Some("--hook") => {
+            let stdin = read_stdin();
+            if args.get(1).map(String::as_str) == Some("cursor") {
+                // O Cursor lê a resposta do hook no stdout.
+                if let Ok(reply) = lq_activity::handle_cursor_hook(&lq_activity::data_dir(), &stdin, now_secs()) { print!("{reply}"); }
+            } else {
+                let _ = lq_activity::handle_claude_hook(&lq_activity::data_dir(), &stdin, now_secs());
+            }
+            true
+        }
+        Some("--cursor-usage") => { println!("{}", lq_providers::cursor::diagnose()); true }
         Some("--statusline") => {
             if let Ok(line) = lq_providers::claude::write_snapshot(&lq_activity::data_dir(), &read_stdin(), now_secs()) {
                 println!("{line}");
@@ -142,6 +159,9 @@ mod demo {
             ProviderRow { id: ProviderId::OpenCode, activity: AgentState::Idle, running: true, detail: None, chats: vec![],
                 result: Ok(Usage { provider: ProviderId::OpenCode, meters: vec![
                     meter(MeterKind::FiveHour, 22.0, 3 * 3600, now), meter(MeterKind::Weekly, 9.0, 5 * 86400, now)].into_iter().filter(|_| !free).collect() }) },
+            // Cursor: só atividade (sem limites); aparece quando ligado na config.
+            ProviderRow { id: ProviderId::Cursor, result: Ok(Usage { provider: ProviderId::Cursor, meters: vec![] }),
+                activity: AgentState::Working, running: true, detail: None, chats: vec![] },
         ]
     }
 }
@@ -167,7 +187,7 @@ fn main() {
     let shared = Shared::new(cfg, config_path(), std::sync::Arc::new(ClaudeAccount));
     let (tx, rx) = mpsc::channel::<()>();
     type Slot = Option<Result<lq_core::model::Usage, String>>;
-    let usage: Arc<Mutex<Vec<Slot>>> = Arc::new(Mutex::new(vec![None; 3]));
+    let usage: Arc<Mutex<Vec<Slot>>> = Arc::new(Mutex::new(vec![None; 4]));
 
     // Thread de rede: busca os limites no intervalo configurado ou sob pedido. Chamadas lentas
     // (até 10–15 s) ficam aqui e nunca seguram a atividade, os alertas nem a UI.
@@ -236,10 +256,10 @@ mod tests {
     #[test]
     fn first_run_enables_only_what_is_installed() {
         let mut c = Config::default();
-        apply_detected(&mut c, [false, true, false]);
-        assert_eq!((c.claude.enabled, c.codex.enabled, c.opencode.enabled), (false, true, false));
+        apply_detected(&mut c, [false, true, false, false]);
+        assert_eq!((c.claude.enabled, c.codex.enabled, c.opencode.enabled, c.cursor.enabled), (false, true, false, false));
         let mut c = Config::default();
-        apply_detected(&mut c, [false, false, false]); // nada encontrado: não deixa o widget vazio
-        assert!(c.claude.enabled && c.codex.enabled && c.opencode.enabled);
+        apply_detected(&mut c, [false, false, false, false]); // nada encontrado: não deixa o widget vazio
+        assert!(c.claude.enabled && c.codex.enabled && c.opencode.enabled && !c.cursor.enabled); // Cursor só liga se for encontrado
     }
 }

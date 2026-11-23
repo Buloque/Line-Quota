@@ -6,6 +6,7 @@ pub enum ProviderId {
     Claude,
     Codex,
     OpenCode,
+    Cursor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

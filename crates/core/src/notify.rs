@@ -43,7 +43,7 @@ pub struct Notifier {
 }
 
 pub fn provider_name(id: ProviderId) -> &'static str {
-    match id { ProviderId::Claude => "Claude Code", ProviderId::Codex => "Codex", ProviderId::OpenCode => "OpenCode" }
+    match id { ProviderId::Claude => "Claude Code", ProviderId::Codex => "Codex", ProviderId::OpenCode => "OpenCode", ProviderId::Cursor => "Cursor" }
 }
 
 fn meter_short(k: MeterKind) -> &'static str {

@@ -68,7 +68,7 @@ pub fn apply(settings: &mut Value, exe: &str) -> Vec<String> {
 }
 
 pub fn remove(settings: &mut Value) {
-    if let Some(h) = settings["hooks"].as_object_mut() {
+    if let Some(h) = settings.get_mut("hooks").and_then(|h| h.as_object_mut()) {
         for (_, arr) in h.iter_mut() {
             if let Some(l) = arr.as_array_mut() { l.retain(|e| !has_cmd(e, MARKER)); }
         }
@@ -122,6 +122,104 @@ pub fn uninstall() -> Result<Vec<String>, String> {
     let p = settings_path();
     if !p.is_file() { return Ok(Vec::new()); } // nada a desfazer: não cria settings.json à toa
     edit_at(&p, |v| { remove(v); vec!["hooks do Line Quota removidos".into()] })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Cursor: hooks em ~/.cursor/hooks.json (`{"version": 1, "hooks": {evento: [{"command": ...}]}}`).
+// Só os eventos que não bloqueiam nada: o hook sempre responde que pode seguir.
+// ---------------------------------------------------------------------------------------------
+const CURSOR_MARKER: &str = "--hook cursor";
+const CURSOR_EVENTS: [&str; 4] = ["beforeSubmitPrompt", "postToolUse", "stop", "sessionEnd"];
+
+fn cursor_hooks_path() -> PathBuf {
+    PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default()).join(".cursor").join("hooks.json")
+}
+
+/// Comando de um hook do Cursor. No Windows o Cursor roda `Get-Content entrada.json | & { $input | <comando> }` pelo
+/// PowerShell (por isso o comando NÃO começa com `$input |`: já vem pipeado). O PowerShell não espera nem captura
+/// a saída de programas "de janela" (como o app): o `| Out-Null` força a espera e a resposta é dada pelo próprio
+/// PowerShell (`{"continue":true}` em beforeSubmitPrompt, `{}` nos demais), sem depender da saída do programa.
+/// Sem aspas duplas no comando (caminho entre aspas simples e `[char]34` na resposta), para sobreviver a
+/// qualquer forma de repasse pela linha de comando.
+fn cursor_command(exe: &str, event: &str) -> String {
+    let reply = if event == "beforeSubmitPrompt" { "'{' + [char]34 + 'continue' + [char]34 + ':true}'" } else { "'{}'" };
+    format!("& '{}' {CURSOR_MARKER} | Out-Null; {reply}", exe.replace(['\'', '\u{2018}', '\u{2019}', '\u{201A}', '\u{201B}'], "''"))
+}
+
+
+/// Aplica os hooks do Cursor num objeto `hooks.json`. Estruturas inesperadas são preservadas (avisa e pula).
+pub fn apply_cursor(cfg: &mut Value, exe: &str) -> Vec<String> {
+    let mut log = Vec::new();
+    if !cfg.is_object() { *cfg = json!({}); }
+    let obj = cfg.as_object_mut().unwrap();
+    obj.entry("version").or_insert_with(|| json!(1));
+    match obj.entry("hooks").or_insert_with(|| json!({})).as_object_mut() {
+        None => log.push("AVISO: \"hooks\" no hooks.json do Cursor não é um objeto; hooks não instalados".into()),
+        Some(hooks) => for ev in CURSOR_EVENTS {
+            match hooks.entry(ev).or_insert_with(|| json!([])).as_array_mut() {
+                None => log.push(format!("AVISO: hook {ev} do Cursor não é uma lista; ignorado")),
+                Some(list) => {
+                    let command = cursor_command(exe, ev);
+                    let mut found = false;
+                    let mut changed = false;
+                    for e in list.iter_mut() {
+                        if e["command"].as_str().is_some_and(|c| c.contains(CURSOR_MARKER)) {
+                            found = true;
+                            if e["command"] != command.as_str() { e["command"] = json!(command); changed = true; }
+                        }
+                    }
+                    if !found { list.push(json!({"command": command})); changed = true; }
+                    if changed { log.push(format!("hook {ev} do Cursor configurado")); }
+                }
+            }
+        },
+    }
+    log
+}
+
+pub fn remove_cursor(cfg: &mut Value) {
+    if let Some(h) = cfg.get_mut("hooks").and_then(|h| h.as_object_mut()) {
+        for (_, arr) in h.iter_mut() {
+            if let Some(l) = arr.as_array_mut() { l.retain(|e| !e["command"].as_str().is_some_and(|c| c.contains(CURSOR_MARKER))); }
+        }
+        h.retain(|_, v| v.as_array().is_none_or(|l| !l.is_empty()));
+    }
+}
+
+fn edit_cursor_at(p: &std::path::Path, f: impl FnOnce(&mut Value) -> Vec<String>) -> Result<Vec<String>, String> {
+    // Sem a pasta ~/.cursor o Cursor não está instalado: não cria nada.
+    if !p.parent().is_some_and(|d| d.is_dir()) {
+        return Ok(vec!["Cursor não encontrado: integração com o Cursor ignorada".into()]);
+    }
+    let txt = match std::fs::read_to_string(p) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{}".into(),
+        Err(e) => return Err(format!("não consegui ler o hooks.json do Cursor ({e}); nada foi alterado")),
+    };
+    let t = txt.trim_start_matches('\u{feff}');
+    let mut v: Value = serde_json::from_str(if t.trim().is_empty() { "{}" } else { t }) // arquivo vazio = {}
+        .map_err(|e| format!("hooks.json do Cursor inválido: {e}"))?;
+    let before = v.clone();
+    let log = f(&mut v);
+    if v == before { return Ok(log); }
+    let bak = p.with_extension("json.lq-bak");
+    if p.is_file() && !bak.exists() { let _ = std::fs::write(&bak, &txt); }
+    let tmp = p.with_extension("json.lq-tmp");
+    std::fs::write(&tmp, serde_json::to_string_pretty(&v).unwrap()).and_then(|_| std::fs::rename(&tmp, p))
+        .map_err(|e| { let _ = std::fs::remove_file(&tmp); e.to_string() })?;
+    Ok(log)
+}
+
+/// Instala os hooks do Cursor apontando para o executável informado (o instalado).
+pub fn install_cursor_for(exe: &std::path::Path) -> Result<Vec<String>, String> {
+    let exe = exe.to_string_lossy().replace('\\', "/");
+    edit_cursor_at(&cursor_hooks_path(), |v| apply_cursor(v, &exe))
+}
+
+pub fn uninstall_cursor() -> Result<Vec<String>, String> {
+    let p = cursor_hooks_path();
+    if !p.is_file() { return Ok(Vec::new()); }
+    edit_cursor_at(&p, |v| { remove_cursor(v); vec!["hooks do Line Quota removidos do Cursor".into()] })
 }
 
 #[cfg(test)]
@@ -232,6 +330,55 @@ mod hardening_tests {
         let m1 = std::fs::metadata(&p).unwrap().modified().unwrap();
         edit_at(&p, |v| apply(v, "\"b.exe\"")).unwrap();
         assert_eq!(std::fs::metadata(&p).unwrap().modified().unwrap(), m1);
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn cursor_hooks_merge_without_touching_the_users_own_hooks() {
+        let mut c = json!({"version": 1, "hooks": {"stop": [{"command": "./meu.sh"}], "afterFileEdit": [{"command": "fmt"}]}});
+        let log = apply_cursor(&mut c, "a.exe");
+        assert_eq!(c["hooks"]["stop"].as_array().unwrap().len(), 2); // o do usuário continua lá
+        assert_eq!(c["hooks"]["stop"][0]["command"], "./meu.sh");
+        assert_eq!(c["hooks"]["afterFileEdit"][0]["command"], "fmt");
+        for ev in CURSOR_EVENTS { assert!(c["hooks"][ev].as_array().unwrap().iter().any(|e| e["command"].as_str().unwrap().contains("--hook cursor")), "{ev}"); }
+        assert!(!log.is_empty());
+        // O PowerShell espera o programa (Out-Null) e dá a resposta: continue=true só em beforeSubmitPrompt.
+        let cmd = |ev: &str| c["hooks"][ev].as_array().unwrap().last().unwrap()["command"].as_str().unwrap().to_string();
+        assert_eq!(cmd("beforeSubmitPrompt"), "& 'a.exe' --hook cursor | Out-Null; '{' + [char]34 + 'continue' + [char]34 + ':true}'");
+        assert_eq!(cmd("stop"), "& 'a.exe' --hook cursor | Out-Null; '{}'");
+        assert!(!cmd("stop").contains('"') && !cmd("beforeSubmitPrompt").contains('"')); // sem aspas duplas
+        assert!(cursor_command("C:/Users/O'Brien/x.exe", "stop").contains("'C:/Users/O''Brien/x.exe'")); // aspa simples escapada
+        // reinstalar em outro caminho reaponta (não duplica); sem mudança, não há o que logar
+        apply_cursor(&mut c, "b.exe");
+        assert_eq!(c["hooks"]["stop"].as_array().unwrap().len(), 2);
+        assert!(c["hooks"]["stop"][1]["command"].as_str().unwrap().contains("b.exe"));
+        assert!(apply_cursor(&mut c, "b.exe").is_empty());
+        // arquivo novo recebe a versão do esquema
+        let mut n = json!({});
+        apply_cursor(&mut n, "x.exe");
+        assert_eq!(n["version"], 1);
+        // remover tira só os nossos
+        remove_cursor(&mut c);
+        assert_eq!(c["hooks"]["stop"], json!([{"command": "./meu.sh"}]));
+        assert!(c["hooks"]["beforeSubmitPrompt"].is_null());
+        // estrutura inesperada é preservada
+        let mut w = json!({"hooks": [1, 2]});
+        assert!(apply_cursor(&mut w, "x.exe").iter().any(|l| l.contains("AVISO")));
+        assert_eq!(w["hooks"], json!([1, 2]));
+    }
+
+    #[test]
+    fn cursor_install_needs_the_cursor_folder_and_keeps_a_backup() {
+        let d = std::env::temp_dir().join(format!("lq-cursor-edit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let p = d.join(".cursor").join("hooks.json");
+        // sem a pasta .cursor: ignora e não cria nada
+        assert!(edit_cursor_at(&p, |v| apply_cursor(v, "x.exe")).unwrap()[0].contains("não encontrado"));
+        assert!(!d.exists());
+        std::fs::create_dir_all(d.join(".cursor")).unwrap();
+        std::fs::write(&p, r#"{"version":1,"hooks":{"stop":[{"command":"./meu.sh"}]}}"#).unwrap();
+        edit_cursor_at(&p, |v| apply_cursor(v, "x.exe")).unwrap();
+        assert!(std::fs::read_to_string(p.with_extension("json.lq-bak")).unwrap().contains("meu.sh"));
         let _ = std::fs::remove_dir_all(&d);
     }
 }

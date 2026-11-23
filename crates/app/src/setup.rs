@@ -67,6 +67,10 @@ pub fn install_app(quiet: bool, autostart: bool, launch: bool) {
             Ok(l) => log.extend(l),
             Err(e) => log.push(format!("Aviso: não consegui configurar o Claude Code ({e}). O widget funciona sem isso.")),
         }
+        match install::install_cursor_for(&target) {
+            Ok(l) => log.extend(l),
+            Err(e) => log.push(format!("Aviso: não consegui configurar o Cursor ({e}). O widget funciona sem isso.")),
+        }
         win::unregister_toast_identity(); // o app recria o atalho do Menu Iniciar apontando para o novo caminho
         win::set_autostart_for(&target, autostart);
         win::register_uninstall(&dir, &target, env!("CARGO_PKG_VERSION"));
@@ -91,7 +95,7 @@ pub fn install_wizard() {
     let dir = install_dir();
     let update = dir.join(EXE_NAME).is_file();
     let text = format!(
-        "O Line Quota mostra na barra de tarefas os limites do Claude Code, Codex e OpenCode.\n\n\
+        "O Line Quota mostra na barra de tarefas os limites do Claude Code, Codex e OpenCode (e a atividade do Cursor).\n\n\
          Nenhum deles é obrigatório e não é preciso ser administrador.\n\nPasta: {}",
         dir.display());
     let heading = if update { "Atualizar o Line Quota" } else { "Instalar o Line Quota" };
@@ -111,6 +115,8 @@ pub fn uninstall_app(quiet: bool, purge: bool) {
     let dir = install_dir();
     stop_others();
     let _ = install::uninstall();
+    let _ = install::uninstall_cursor();
+    lq_providers::cursor_auth::clear(); // segredo: nunca fica para trás, nem sem o purge
     win::unregister_toast_identity();
     win::set_autostart_for(&dir.join(EXE_NAME), false);
     win::unregister_uninstall();

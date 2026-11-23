@@ -29,7 +29,7 @@ pub struct ProviderRow {
 }
 
 pub fn label(id: ProviderId) -> &'static str {
-    match id { ProviderId::Claude => "Cl", ProviderId::Codex => "Cx", ProviderId::OpenCode => "OC" }
+    match id { ProviderId::Claude => "Cl", ProviderId::Codex => "Cx", ProviderId::OpenCode => "OC", ProviderId::Cursor => "Cu" }
 }
 
 pub fn level(used: f32) -> Level {
@@ -70,8 +70,8 @@ pub fn segments(rows: &[ProviderRow], cfg: &Config) -> Vec<Seg> {
         }
         match &row.result {
             Err(_) => out.push(text("!", Level::Crit)),
-            Ok(u) if u.meters.is_empty() && row.id == ProviderId::OpenCode => {
-                // Sem plano pago não há limite a medir: fica só o ícone (sem o espaço sobrando).
+            Ok(u) if u.meters.is_empty() && matches!(row.id, ProviderId::OpenCode | ProviderId::Cursor) => {
+                // Sem limite a medir (OpenCode sem plano pago, Cursor): fica só o ícone (sem o espaço sobrando).
                 if matches!(out.last(), Some(Seg::Text(t, _)) if t == " ") { out.pop(); }
                 if cfg.ui.labels == LabelStyle::None { out.push(text(label(row.id), Level::Dim)); } // senão a linha ficaria vazia
             }
@@ -122,7 +122,7 @@ pub fn tooltip(rows: &[ProviderRow], cfg: &Config) -> String {
 
 
 pub fn full_name(id: ProviderId) -> &'static str {
-    match id { ProviderId::Claude => "Claude Code", ProviderId::Codex => "Codex", ProviderId::OpenCode => "OpenCode" }
+    match id { ProviderId::Claude => "Claude Code", ProviderId::Codex => "Codex", ProviderId::OpenCode => "OpenCode", ProviderId::Cursor => "Cursor" }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

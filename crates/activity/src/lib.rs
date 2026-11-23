@@ -46,9 +46,46 @@ fn file_for(dir: &Path, tool: &str, session: &str) -> PathBuf {
 /// Processa o JSON que o Claude Code envia ao hook via stdin.
 pub fn handle_claude_hook(dir: &Path, stdin: &str, now: i64) -> std::io::Result<()> {
     let v: Value = serde_json::from_str(stdin.trim_start_matches('\u{feff}')).unwrap_or(Value::Null);
+    handle_event(dir, "claude", &v, now)
+}
+
+/// Evento do Cursor -> o nome equivalente do Claude Code (assim a mesma lógica serve aos dois).
+pub fn cursor_event(name: &str) -> Option<&'static str> {
+    match name {
+        "beforeSubmitPrompt" => Some("UserPromptSubmit"),
+        "postToolUse" => Some("PostToolUse"),
+        "stop" => Some("Stop"),
+        "sessionEnd" => Some("SessionEnd"),
+        _ => None,
+    }
+}
+
+/// Processa o JSON que o Cursor envia ao hook via stdin e devolve o que escrever no stdout.
+/// Campos usados (doc oficial de hooks): `conversation_id`, `workspace_roots`, `prompt` (beforeSubmitPrompt),
+/// `tool_name`/`tool_input` (postToolUse). O Cursor não usa o texto de saída destes eventos além de
+/// `{"continue": true}` em beforeSubmitPrompt, que damos sempre (nunca bloqueamos nada).
+pub fn handle_cursor_hook(dir: &Path, stdin: &str, now: i64) -> std::io::Result<String> {
+    let v: Value = serde_json::from_str(stdin.trim_start_matches('\u{feff}')).unwrap_or(Value::Null);
+    let name = v["hook_event_name"].as_str().unwrap_or("");
+    let reply = if name == "beforeSubmitPrompt" { r#"{"continue":true}"# } else { "{}" }.to_string();
+    let Some(event) = cursor_event(name) else { return Ok(reply) };
+    let session = v["conversation_id"].as_str().or_else(|| v["session_id"].as_str()).unwrap_or("default");
+    // `tool_input` pode vir como objeto ou como texto JSON.
+    let tool_input = match &v["tool_input"] {
+        Value::String(s) => serde_json::from_str(s).unwrap_or(Value::Null),
+        o => o.clone(),
+    };
+    let mut n = json!({"hook_event_name": event, "session_id": session, "tool_name": v["tool_name"], "tool_input": tool_input});
+    if let Some(cwd) = v["workspace_roots"][0].as_str().or_else(|| v["cwd"].as_str()) { n["cwd"] = json!(cwd); }
+    if let Some(p) = v["prompt"].as_str() { n["prompt"] = json!(p); }
+    handle_event(dir, "cursor", &n, now)?;
+    Ok(reply)
+}
+
+fn handle_event(dir: &Path, tool: &str, v: &Value, now: i64) -> std::io::Result<()> {
     let event = v["hook_event_name"].as_str().unwrap_or("");
     let session = v["session_id"].as_str().unwrap_or("default");
-    let path = file_for(dir, "claude", session);
+    let path = file_for(dir, tool, session);
     match claude_action(event, v["notification_type"].as_str()) {
         Action::Ignore => Ok(()),
         Action::Remove => { let _ = std::fs::remove_file(path); Ok(()) }
@@ -63,7 +100,7 @@ pub fn handle_claude_hook(dir: &Path, stdin: &str, now: i64) -> std::io::Result<
                 o["project"] = lq_core::model::project_from_dir(cwd).map_or(Value::Null, |n| json!(n));
             }
             // Nome do chat (o que aparece no Claude Code): lido do transcript só em eventos raros.
-            if matches!(event, "UserPromptSubmit" | "Stop") {
+            if tool == "claude" && matches!(event, "UserPromptSubmit" | "Stop") {
                 if let Some(n) = v["transcript_path"].as_str().and_then(transcript_title) { o["name"] = json!(clip(&n, 48)); }
             }
             match event {
@@ -249,6 +286,27 @@ mod tests {
         let x = detail(&d, "claude", 120).unwrap();
         assert_eq!((x.project.as_deref(), x.prompt.as_deref()), (Some("Meu Proj"), Some("faz isso")));
         assert_eq!((x.tool.as_deref(), x.target.as_deref(), x.since), (Some("Edit"), Some("win.rs"), Some(100)));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn cursor_hooks_drive_working_and_idle() {
+        let d = tmp("cursor");
+        let r = handle_cursor_hook(&d, r#"{"hook_event_name":"beforeSubmitPrompt","conversation_id":"c1","workspace_roots":["C:\\a\\Meu App"],"prompt":"conserta o login"}"#, 100).unwrap();
+        assert_eq!(r, r#"{"continue":true}"#); // nunca bloqueia o prompt
+        assert_eq!(aggregate(&d, "cursor", 105, 1800), AgentState::Working);
+        handle_cursor_hook(&d, r#"{"hook_event_name":"postToolUse","conversation_id":"c1","tool_name":"Edit","tool_input":"{\"file_path\":\"C:\\\\a\\\\auth.rs\"}"}"#, 110).unwrap();
+        let x = detail(&d, "cursor", 115).unwrap();
+        assert_eq!((x.project.as_deref(), x.prompt.as_deref()), (Some("Meu App"), Some("conserta o login")));
+        assert_eq!((x.tool.as_deref(), x.target.as_deref()), (Some("Edit"), Some("auth.rs"))); // tool_input como texto JSON
+        assert_eq!(handle_cursor_hook(&d, r#"{"hook_event_name":"stop","conversation_id":"c1","status":"completed"}"#, 120).unwrap(), "{}");
+        assert_eq!(aggregate(&d, "cursor", 125, 1800), AgentState::Idle);
+        handle_cursor_hook(&d, r#"{"hook_event_name":"sessionEnd","conversation_id":"c1"}"#, 130).unwrap();
+        assert!(chats(&d, "cursor", 131, 1800).is_empty());
+        // evento que não usamos: não grava nada e responde com objeto vazio
+        assert_eq!(handle_cursor_hook(&d, r#"{"hook_event_name":"preToolUse","conversation_id":"c1"}"#, 140).unwrap(), "{}");
+        // o Cursor e o Claude não se misturam
+        assert_eq!(aggregate(&d, "claude", 125, 1800), AgentState::Idle);
         let _ = std::fs::remove_dir_all(&d);
     }
 
