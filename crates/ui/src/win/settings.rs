@@ -60,7 +60,7 @@ pub(super) unsafe fn open(tile: HWND) {
         CLIP_DEFAULT_PRECIS.0 as u32, CLEARTYPE_QUALITY.0 as u32, 0, w!("Segoe UI"));
     SET_FONT.store(f.0 as isize, Ordering::Relaxed);
 
-    let (cw, ch) = (scale(648), scale(600));
+    let (cw, ch) = (scale(648), scale(628));
     let mut rc = RECT { left: 0, top: 0, right: cw, bottom: ch };
     let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
     let _ = AdjustWindowRectEx(&mut rc, style, false, WINDOW_EX_STYLE(0));
@@ -72,7 +72,7 @@ pub(super) unsafe fn open(tile: HWND) {
 
     // Coluna esquerda: aparência, posição, alertas.
     let (lx, lw) = (12, 300);
-    group(h, "Aparência", lx, 8, lw, 236);
+    group(h, "Aparência", lx, 8, lw, 260);
     label(h, "Exibição", lx + 12, 28, 90);
     combo(h, lx + 110, 28, 176, ID_DISPLAY, &["Número", "Barra de progresso", "Barra + número"]);
     label(h, "Identificação", lx + 12, 58, 90);
@@ -87,30 +87,31 @@ pub(super) unsafe fn open(tile: HWND) {
     check(h, "Mostrar o que resta (em vez do usado)", lx + 12, 144, 270, ID_SHOW_REMAINING);
     check(h, "Limite de 5 horas", lx + 12, 168, 270, ID_SHOW_5H);
     check(h, "Limite semanal", lx + 12, 192, 270, ID_SHOW_WEEK);
-    check(h, "Tarefa ativa / aguardando resposta", lx + 12, 216, 270, ID_SHOW_ACTIVITY);
+    check(h, "Limite mensal (Codex gratuito)", lx + 12, 216, 270, ID_SHOW_MONTH);
+    check(h, "Tarefa ativa / aguardando resposta", lx + 12, 240, 270, ID_SHOW_ACTIVITY);
 
-    group(h, "Posição", lx, 252, lw, 92);
-    label(h, "Na barra", lx + 12, 272, 90);
-    combo(h, lx + 110, 272, 176, ID_ANCHOR, &["Ao lado da bandeja", "Início da barra", "Centro da barra", "Livre (arrastado)"]);
-    label(h, "Monitor", lx + 12, 302, 90);
-    let mc = combo(h, lx + 110, 302, 176, ID_MONITOR, &["Automático"]);
+    group(h, "Posição", lx, 276, lw, 92);
+    label(h, "Na barra", lx + 12, 296, 90);
+    combo(h, lx + 110, 296, 176, ID_ANCHOR, &["Ao lado da bandeja", "Início da barra", "Centro da barra", "Livre (arrastado)"]);
+    label(h, "Monitor", lx + 12, 326, 90);
+    let mc = combo(h, lx + 110, 326, 176, ID_MONITOR, &["Automático"]);
     for (i, m) in monitors().iter().enumerate() {
         let n = format!("Monitor {}{}", i + 1, if m.primary { " (principal)" } else { "" });
         SendMessageW(mc, CB_ADDSTRING, WPARAM(0), LPARAM(wide0(&n).as_ptr() as isize));
     }
 
-    group(h, "Alertas", lx, 352, lw, 238);
-    check(h, "Alertas ativados", lx + 12, 372, 270, ID_ALERT_ENABLED);
-    check(h, "Mostrar notificações do Windows", lx + 12, 396, 270, ID_ALERT_TOAST);
-    check(h, "Tocar som", lx + 12, 420, 270, ID_ALERT_SOUND);
-    check(h, "Avisar quando o limite renovar", lx + 12, 444, 270, ID_ALERT_RESET);
-    check(h, "Avisar quando a tarefa terminar", lx + 12, 468, 270, ID_ALERT_DONE);
-    check(h, "Avisar quando precisar de resposta", lx + 12, 492, 270, ID_ALERT_INPUT);
-    label(h, "Avisar acima de", lx + 12, 522, 100);
+    group(h, "Alertas", lx, 376, lw, 238);
+    check(h, "Alertas ativados", lx + 12, 396, 270, ID_ALERT_ENABLED);
+    check(h, "Mostrar notificações do Windows", lx + 12, 420, 270, ID_ALERT_TOAST);
+    check(h, "Tocar som", lx + 12, 444, 270, ID_ALERT_SOUND);
+    check(h, "Avisar quando o limite renovar", lx + 12, 468, 270, ID_ALERT_RESET);
+    check(h, "Avisar quando a tarefa terminar", lx + 12, 492, 270, ID_ALERT_DONE);
+    check(h, "Avisar quando precisar de resposta", lx + 12, 516, 270, ID_ALERT_INPUT);
+    label(h, "Avisar acima de", lx + 12, 546, 100);
     let labels: Vec<String> = THRESHOLD_PRESETS.iter()
         .map(|p| p.iter().map(|t| format!("{t:.0}%")).collect::<Vec<_>>().join(" / ")).collect();
-    combo(h, lx + 110, 522, 176, ID_THRESH, &labels.iter().map(String::as_str).collect::<Vec<_>>());
-    push(h, "Testar notificação", lx + 12, 554, 150, ID_ALERT_TEST);
+    combo(h, lx + 110, 546, 176, ID_THRESH, &labels.iter().map(String::as_str).collect::<Vec<_>>());
+    push(h, "Testar notificação", lx + 12, 578, 150, ID_ALERT_TEST);
 
     // Coluna direita: provedores, conta, sistema.
     let (rx, rw) = (324, 312);
@@ -136,8 +137,9 @@ pub(super) unsafe fn open(tile: HWND) {
     label(h, "Chats no painel: últimos", rx + 12, 466, 150);
     let wl: Vec<String> = CHAT_WINDOWS.iter().map(|m| crate::view::fmt_window(*m)).collect();
     combo(h, rx + 170, 466, 120, ID_CHATWIN, &wl.iter().map(String::as_str).collect::<Vec<_>>());
+    check(h, "Travar a posição na barra", rx + 12, 494, 285, ID_LOCK);
 
-    push(h, "Fechar", rx + rw - 100, 556, 100, ID_CLOSE);
+    push(h, "Fechar", rx + rw - 100, 590, 100, ID_CLOSE);
 
     apply_theme(h);
     sync(h);
@@ -166,7 +168,7 @@ unsafe fn sync(h: HWND) {
     let (u, a) = (&cfg.ui, &cfg.alerts);
     for (id, on) in [
         (ID_TRANSPARENT, u.transparent), (ID_SHOW_REMAINING, u.show_remaining),
-        (ID_SHOW_5H, cfg.claude.show_five_hour), (ID_SHOW_WEEK, cfg.claude.show_weekly), (ID_SHOW_ACTIVITY, cfg.claude.show_activity),
+        (ID_SHOW_5H, cfg.claude.show_five_hour), (ID_SHOW_WEEK, cfg.claude.show_weekly), (ID_SHOW_MONTH, cfg.claude.show_monthly), (ID_LOCK, u.locked), (ID_SHOW_ACTIVITY, cfg.claude.show_activity),
         (ID_ALERT_ENABLED, a.enabled), (ID_ALERT_TOAST, a.toast), (ID_ALERT_SOUND, a.sound),
         (ID_ALERT_RESET, a.notify_reset), (ID_ALERT_DONE, a.notify_task_done), (ID_ALERT_INPUT, a.notify_needs_input),
         (ID_PROVIDER, cfg.claude.enabled), (ID_PROVIDER + 1, cfg.codex.enabled), (ID_PROVIDER + 2, cfg.opencode.enabled),

@@ -62,6 +62,10 @@ pub fn handle_claude_hook(dir: &Path, stdin: &str, now: i64) -> std::io::Result<
             if let Some(cwd) = v["cwd"].as_str() {
                 o["project"] = lq_core::model::project_from_dir(cwd).map_or(Value::Null, |n| json!(n));
             }
+            // Nome do chat (o que aparece no Claude Code): lido do transcript só em eventos raros.
+            if matches!(event, "UserPromptSubmit" | "Stop") {
+                if let Some(n) = v["transcript_path"].as_str().and_then(transcript_title) { o["name"] = json!(clip(&n, 48)); }
+            }
             match event {
                 "UserPromptSubmit" => {
                     if let Some(p) = v["prompt"].as_str() {
@@ -91,6 +95,31 @@ pub fn handle_claude_hook(dir: &Path, stdin: &str, now: i64) -> std::io::Result<
             std::fs::write(path, o.to_string())
         }
     }
+}
+
+/// Nome do chat no transcript do Claude Code (`custom-title`, senão `agent-name`). Lê só o final do arquivo.
+pub fn transcript_title(path: &str) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(256 * 1024))).ok()?;
+    let mut buf = Vec::new();
+    f.read_to_end(&mut buf).ok()?;
+    title_from_transcript(&String::from_utf8_lossy(&buf))
+}
+
+fn title_from_transcript(text: &str) -> Option<String> {
+    let (mut custom, mut agent) = (None, None);
+    for line in text.lines() {
+        if !line.contains("-title\"") && !line.contains("\"agent-name\"") { continue; }
+        let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+        match v["type"].as_str() {
+            Some("custom-title") => custom = v["customTitle"].as_str().map(str::to_string),
+            Some("agent-name") => agent = v["agentName"].as_str().map(str::to_string),
+            _ => {}
+        }
+    }
+    custom.or(agent).filter(|t| !t.trim().is_empty())
 }
 
 fn clip(s: &str, n: usize) -> String {
@@ -142,7 +171,8 @@ pub fn chats(dir: &Path, tool: &str, now: i64, working_stale: i64) -> Vec<ChatIn
         out.push(ChatInfo {
             id: name.trim_start_matches(&prefix).trim_end_matches(".json").to_string(),
             project: d.project.clone(),
-            title: v["title"].as_str().map(str::to_string).or_else(|| d.prompt.clone()).unwrap_or_else(|| "Chat".into()),
+            // Nome do chat; sem nome, o 1º pedido.
+            title: v["name"].as_str().or_else(|| v["title"].as_str()).map(str::to_string).or_else(|| d.prompt.clone()).unwrap_or_else(|| "Chat".into()),
             state, detail: d,
         });
     }
@@ -245,6 +275,27 @@ mod tests {
 #[cfg(test)]
 mod chats_tests {
     use super::*;
+
+    #[test]
+    fn chat_name_comes_from_the_transcript() {
+        let t = concat!(r#"{"type":"user","message":"oi"}"#, "\n",
+            r#"{"type":"agent-name","agentName":"Nome do agente","sessionId":"s"}"#, "\n",
+            r#"{"type":"custom-title","customTitle":"Corrigir o instalador","sessionId":"s"}"#, "\n");
+        assert_eq!(title_from_transcript(t).as_deref(), Some("Corrigir o instalador"));
+        assert_eq!(title_from_transcript(r#"{"type":"agent-name","agentName":"Só agente"}"#).as_deref(), Some("Só agente"));
+        assert_eq!(title_from_transcript(r#"{"type":"user"}"#), None);
+
+        let d = std::env::temp_dir().join(format!("lq-title-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let tp = d.join("t.jsonl");
+        std::fs::write(&tp, t).unwrap();
+        let ev = format!(r#"{{"hook_event_name":"UserPromptSubmit","session_id":"a","cwd":"C:/x/App","prompt":"faz algo","transcript_path":{}}}"#, serde_json::to_string(&tp.to_string_lossy()).unwrap());
+        handle_claude_hook(&d, &ev, 100).unwrap();
+        let c = chats(&d, "claude", 110, 600);
+        assert_eq!((c[0].title.as_str(), c[0].detail.prompt.as_deref()), ("Corrigir o instalador", Some("faz algo")));
+        let _ = std::fs::remove_dir_all(&d);
+    }
 
     #[test]
     fn lists_every_session_with_title_and_state() {

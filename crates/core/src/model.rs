@@ -12,6 +12,8 @@ pub enum ProviderId {
 pub enum MeterKind {
     FiveHour,
     Weekly,
+    /// Janela de ~30 dias (ex.: Codex no plano gratuito).
+    Monthly,
 }
 
 /// Uma janela de limite. `used_pct` vai de 0 a 100.

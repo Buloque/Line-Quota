@@ -73,7 +73,7 @@ pub fn segments(rows: &[ProviderRow], cfg: &Config) -> Vec<Seg> {
             }
             Ok(u) => {
                 let mut first = true;
-                for (kind, show, tag) in [(MeterKind::FiveHour, pc.show_five_hour, "5h"), (MeterKind::Weekly, pc.show_weekly, "7d")] {
+                for (kind, show, tag) in [(MeterKind::FiveHour, pc.show_five_hour, "5h"), (MeterKind::Weekly, pc.show_weekly, "7d"), (MeterKind::Monthly, pc.show_monthly, "30d")] {
                     if !show { continue; }
                     let Some(m) = u.meter(kind) else { continue };
                     if !first { out.push(text("  ", Level::Dim)); }
@@ -106,7 +106,7 @@ pub fn tooltip(rows: &[ProviderRow], cfg: &Config) -> String {
             Ok(u) => {
                 s.push_str(label(r.id));
                 for m in &u.meters {
-                    let tag = if m.kind == MeterKind::FiveHour { "5h" } else { "7d" };
+                    let tag = match m.kind { MeterKind::FiveHour => "5h", MeterKind::Weekly => "7d", MeterKind::Monthly => "30d" };
                     s.push_str(&format!(" {tag} {:.0}%", m.used_pct));
                 }
             }
@@ -193,7 +193,7 @@ pub fn limit_lines(row: &ProviderRow, now: i64) -> Vec<FlyLine> {
         Err(e) => v.push(fl(FlyKind::Body, "Limites", e.clone(), Level::Crit)),
         Ok(u) if u.meters.is_empty() => v.push(fl(FlyKind::Body, "Plano", "Gratuito ou por chave de API: sem limite de 5h/semanal para medir", Level::Dim)),
         Ok(u) => for m in &u.meters {
-            let tag = if m.kind == MeterKind::FiveHour { "5 horas" } else { "Semanal" };
+            let tag = match m.kind { MeterKind::FiveHour => "5 horas", MeterKind::Weekly => "Semanal", MeterKind::Monthly => "Mensal" };
             let reset = m.resets_at.map(|r| format!(" · renova em {}", fmt_duration(r - now))).unwrap_or_default();
             let est = if m.estimated { "~" } else { "" };
             v.push(fl(FlyKind::Body, tag, format!("{est}{:.0}% usado{reset}", m.used_pct), level(m.used_pct)));
@@ -305,6 +305,23 @@ mod tests {
         let s = segments(&[row(42.0, 85.0)], &cfg(DisplayMode::Number, LabelStyle::Text));
         assert_eq!(flat(&s), "Cx 5h 42%  7d 85%");
         assert!(s.contains(&Seg::Text("85%".into(), Level::Crit)));
+    }
+
+    #[test]
+    fn free_codex_shows_the_monthly_limit_with_its_own_toggle() {
+        use lq_core::model::Meter;
+        let free = ProviderRow {
+            id: ProviderId::Codex, activity: AgentState::Idle, running: true, detail: None, chats: vec![],
+            result: Ok(Usage { provider: ProviderId::Codex, meters: vec![Meter { kind: MeterKind::Monthly, used_pct: 12.0, resets_at: None, estimated: false }] }),
+        };
+        let mut c = cfg(DisplayMode::Number, LabelStyle::Text);
+        assert_eq!(flat(&segments(&[free.clone()], &c)), "Cx 30d 12%");
+        c.codex.show_weekly = false; // esconder o semanal não esconde o mensal
+        assert_eq!(flat(&segments(&[free.clone()], &c)), "Cx 30d 12%");
+        c.codex.show_monthly = false;
+        assert_eq!(flat(&segments(&[free.clone()], &c)), "Cx ");
+        assert!(tooltip(&[free.clone()], &Config::default()).contains("30d 12%"));
+        assert!(limit_lines(&free, 0).iter().any(|l| l.label == "Mensal"));
     }
 
     #[test]

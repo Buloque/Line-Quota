@@ -75,13 +75,22 @@ pub fn remove(settings: &mut Value) {
     }
 }
 
+/// O Claude Code é opcional: sem a pasta `~/.claude` ele não está instalado (e não há o que configurar).
+fn claude_present(p: &std::path::Path) -> bool { p.parent().is_some_and(|d| d.is_dir()) }
+
 fn edit(f: impl FnOnce(&mut Value) -> Vec<String>) -> Result<Vec<String>, String> {
-    let p = settings_path();
-    let txt = std::fs::read_to_string(&p).unwrap_or_else(|_| "{}".into());
+    edit_at(&settings_path(), f)
+}
+
+fn edit_at(p: &std::path::Path, f: impl FnOnce(&mut Value) -> Vec<String>) -> Result<Vec<String>, String> {
+    if !claude_present(p) {
+        return Ok(vec!["Claude Code não encontrado: integração com o Claude ignorada (o widget funciona sem ele)".into()]);
+    }
+    let txt = std::fs::read_to_string(p).unwrap_or_else(|_| "{}".into());
     let mut v: Value = serde_json::from_str(txt.trim_start_matches('\u{feff}')).map_err(|e| format!("settings.json inválido: {e}"))?;
     let _ = std::fs::write(p.with_extension("json.lq-bak"), &txt); // backup antes de mexer
     let log = f(&mut v);
-    std::fs::write(&p, serde_json::to_string_pretty(&v).unwrap()).map_err(|e| e.to_string())?;
+    std::fs::write(p, serde_json::to_string_pretty(&v).unwrap()).map_err(|e| e.to_string())?;
     Ok(log)
 }
 
@@ -92,7 +101,12 @@ pub fn install_for(exe: &std::path::Path) -> Result<Vec<String>, String> {
     let cmd = format!("\"{}\"", exe.to_string_lossy().replace('\\', "/"));
     edit(|v| apply(v, &cmd))
 }
-pub fn uninstall() -> Result<Vec<String>, String> { edit(|v| { remove(v); vec!["hooks do Line Quota removidos".into()] }) }
+
+pub fn uninstall() -> Result<Vec<String>, String> {
+    let p = settings_path();
+    if !p.is_file() { return Ok(Vec::new()); } // nada a desfazer: não cria settings.json à toa
+    edit_at(&p, |v| { remove(v); vec!["hooks do Line Quota removidos".into()] })
+}
 
 #[cfg(test)]
 mod tests {
@@ -123,6 +137,32 @@ mod tests {
         remove(&mut s);
         assert!(s["hooks"].as_object().unwrap().is_empty());
         assert!(s["statusLine"].is_null());
+    }
+}
+
+#[cfg(test)]
+mod optional_claude_tests {
+    use super::*;
+
+    #[test]
+    fn without_claude_installed_nothing_fails_and_nothing_is_created() {
+        let d = std::env::temp_dir().join(format!("lq-noclaude-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let p = d.join(".claude").join("settings.json"); // a pasta .claude não existe
+        let log = edit_at(&p, |v| apply(v, "\"a.exe\"")).unwrap();
+        assert!(log[0].contains("Claude Code não encontrado"));
+        assert!(!d.exists());
+    }
+
+    #[test]
+    fn with_claude_folder_the_settings_file_is_created() {
+        let d = std::env::temp_dir().join(format!("lq-claude-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join(".claude")).unwrap();
+        let p = d.join(".claude").join("settings.json");
+        edit_at(&p, |v| apply(v, "\"a.exe\"")).unwrap();
+        assert!(std::fs::read_to_string(&p).unwrap().contains("--hook claude"));
+        let _ = std::fs::remove_dir_all(&d);
     }
 }
 

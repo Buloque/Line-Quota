@@ -18,13 +18,30 @@ fn config_path() -> PathBuf {
     PathBuf::from(std::env::var("APPDATA").unwrap_or_default()).join("LineQuota").join("config.toml")
 }
 
+/// Quais agentes parecem instalados: pastas de dados do Claude Code, Codex e OpenCode.
+fn detect_installed() -> [bool; 3] {
+    let home = PathBuf::from(std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default());
+    let opencode = std::env::var("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|_| home.join(".local").join("share")).join("opencode");
+    [home.join(".claude").is_dir(), home.join(".codex").is_dir(), opencode.is_dir()]
+}
+
+/// Primeira execução: liga só os agentes encontrados (nenhum é obrigatório). Se não achar nenhum, mantém todos.
+fn apply_detected(c: &mut Config, found: [bool; 3]) {
+    if found.iter().any(|f| *f) {
+        c.claude.enabled = found[0];
+        c.codex.enabled = found[1];
+        c.opencode.enabled = found[2];
+    }
+}
+
 /// Carrega a config; cria o arquivo com padrões se não existir.
 fn load_config() -> Config {
     let p = config_path();
     match std::fs::read_to_string(&p) {
         Ok(s) => Config::from_toml(&s).unwrap_or_default(),
         Err(_) => {
-            let c = Config::default();
+            let mut c = Config::default();
+            apply_detected(&mut c, detect_installed());
             if let Some(dir) = p.parent() { let _ = std::fs::create_dir_all(dir); }
             let _ = std::fs::write(&p, c.to_toml());
             c
@@ -128,4 +145,19 @@ fn main() {
     });
 
     let _ = win::run(shared, tx);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn first_run_enables_only_what_is_installed() {
+        let mut c = Config::default();
+        apply_detected(&mut c, [false, true, false]);
+        assert_eq!((c.claude.enabled, c.codex.enabled, c.opencode.enabled), (false, true, false));
+        let mut c = Config::default();
+        apply_detected(&mut c, [false, false, false]); // nada encontrado: não deixa o widget vazio
+        assert!(c.claude.enabled && c.codex.enabled && c.opencode.enabled);
+    }
 }

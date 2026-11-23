@@ -47,7 +47,7 @@ pub fn provider_name(id: ProviderId) -> &'static str {
 }
 
 fn meter_short(k: MeterKind) -> &'static str {
-    match k { MeterKind::FiveHour => "5h", MeterKind::Weekly => "semana" }
+    match k { MeterKind::FiveHour => "5h", MeterKind::Weekly => "semana", MeterKind::Monthly => "mês" }
 }
 
 fn capitalize(s: &str) -> String {
@@ -56,7 +56,7 @@ fn capitalize(s: &str) -> String {
 }
 
 fn meter_name(k: MeterKind) -> &'static str {
-    match k { MeterKind::FiveHour => "limite de 5 horas", MeterKind::Weekly => "limite semanal" }
+    match k { MeterKind::FiveHour => "limite de 5 horas", MeterKind::Weekly => "limite semanal", MeterKind::Monthly => "limite mensal" }
 }
 
 /// "1h 23m", "5m", "<1m".

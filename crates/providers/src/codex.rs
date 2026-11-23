@@ -39,18 +39,25 @@ fn parse_auth(json: &str) -> Result<(String, Option<String>), String> {
     Ok((access.to_string(), t["account_id"].as_str().map(str::to_string)))
 }
 
+/// Tipo da janela pela duração; sem duração, pelo tempo até renovar (>8 dias só cabe num limite mensal).
+fn window_kind(w: &Value, fallback: MeterKind, now: i64) -> MeterKind {
+    match w["limit_window_seconds"].as_i64() {
+        Some(s) if s <= 6 * 3600 => MeterKind::FiveHour,
+        Some(s) if s >= 25 * 86400 => MeterKind::Monthly,
+        Some(s) if s >= 5 * 86400 => MeterKind::Weekly,
+        Some(_) => fallback,
+        None => {
+            let until = w["reset_after_seconds"].as_i64().or_else(|| w["reset_at"].as_i64().map(|r| r - now));
+            if until.is_some_and(|u| u > 8 * 86400) { MeterKind::Monthly } else { fallback }
+        }
+    }
+}
+
 fn window(w: &Value, fallback: MeterKind) -> Option<Meter> {
     let used = w["used_percent"].as_f64()? as f32;
-    let kind = match w["limit_window_seconds"].as_i64() {
-        Some(s) if s <= 6 * 3600 => MeterKind::FiveHour,
-        Some(s) if s >= 5 * 86400 => MeterKind::Weekly,
-        _ => fallback,
-    };
-    let resets_at = w["reset_at"].as_i64().or_else(|| {
-        let after = w["reset_after_seconds"].as_i64()?;
-        Some(now_secs() + after)
-    });
-    Some(Meter { kind, used_pct: used.clamp(0.0, 100.0), resets_at, estimated: false })
+    let now = now_secs();
+    let resets_at = w["reset_at"].as_i64().or_else(|| Some(now + w["reset_after_seconds"].as_i64()?));
+    Some(Meter { kind: window_kind(w, fallback, now), used_pct: used.clamp(0.0, 100.0), resets_at, estimated: false })
 }
 
 fn now_secs() -> i64 {
@@ -65,6 +72,10 @@ pub fn parse_usage(json: &str) -> Result<Usage, String> {
     if let Some(m) = window(&rl["secondary_window"], MeterKind::Weekly) { meters.push(m); }
     if meters.is_empty() {
         return Err("resposta sem janelas de limite".into());
+    }
+    // Plano gratuito: só existe o limite mensal, mesmo que a janela única venha como "secundária"/sem duração.
+    if v["plan_type"].as_str() == Some("free") && meters.len() == 1 && meters[0].kind == MeterKind::Weekly {
+        meters[0].kind = MeterKind::Monthly;
     }
     Ok(Usage { provider: ProviderId::Codex, meters })
 }
@@ -117,6 +128,26 @@ mod tests {
         assert_eq!(u.meter(MeterKind::FiveHour).unwrap().used_pct, 42.5);
         assert_eq!(u.meter(MeterKind::FiveHour).unwrap().resets_at, Some(1000));
         assert!(u.meter(MeterKind::Weekly).unwrap().resets_at.unwrap() > 1000);
+    }
+
+    #[test]
+    fn free_plan_monthly_window() {
+        // Duração de ~30 dias: limite mensal, não semanal.
+        let j = r#"{"plan_type":"free","rate_limit":{"primary_window":{"used_percent":12,"limit_window_seconds":2592000,"reset_after_seconds":100}}}"#;
+        let u = parse_usage(j).unwrap();
+        assert_eq!(u.meters.len(), 1);
+        assert_eq!(u.meter(MeterKind::Monthly).unwrap().used_pct, 12.0);
+        assert!(u.meter(MeterKind::Weekly).is_none() && u.meter(MeterKind::FiveHour).is_none());
+        // Sem duração, renova em 20 dias: também mensal.
+        let j = r#"{"rate_limit":{"primary_window":{"used_percent":5,"reset_after_seconds":1728000}}}"#;
+        assert!(parse_usage(j).unwrap().meter(MeterKind::Monthly).is_some());
+        // Plano gratuito com janela única e duração desconhecida (perto do reset): mensal.
+        let j = r#"{"plan_type":"free","rate_limit":{"secondary_window":{"used_percent":5,"reset_after_seconds":3600}}}"#;
+        assert!(parse_usage(j).unwrap().meter(MeterKind::Monthly).is_some());
+        // Plano pago continua 5h + semanal.
+        let j = r#"{"plan_type":"plus","rate_limit":{"primary_window":{"used_percent":1,"limit_window_seconds":18000},"secondary_window":{"used_percent":2,"limit_window_seconds":604800}}}"#;
+        let u = parse_usage(j).unwrap();
+        assert!(u.meter(MeterKind::Weekly).is_some() && u.meter(MeterKind::Monthly).is_none());
     }
 
     #[test]
@@ -277,14 +308,49 @@ fn read_head_text(p: &std::path::Path) -> String {
     String::from_utf8_lossy(&buf).into_owned()
 }
 
+/// Nomes dos chats a partir do `session_index.jsonl` do Codex (id → nome; o último registro vale).
+pub fn thread_names(index: &str) -> std::collections::HashMap<String, String> {
+    let mut m = std::collections::HashMap::new();
+    for l in index.lines() {
+        let Ok(v) = serde_json::from_str::<Value>(l) else { continue };
+        if let (Some(id), Some(n)) = (v["id"].as_str(), v["thread_name"].as_str()) {
+            let n = clip(n, 48);
+            if !n.is_empty() { m.insert(id.to_string(), n); }
+        }
+    }
+    m
+}
+
+/// O arquivo da sessão se chama `rollout-<data>-<uuid>`; o uuid é o id usado no índice.
+fn session_uuid(stem: &str) -> &str {
+    if stem.len() >= 36 && stem.is_char_boundary(stem.len() - 36) { &stem[stem.len() - 36..] } else { stem }
+}
+
+/// Fim do índice de nomes (limitado; os nomes mais recentes ficam no final do arquivo).
+fn read_index_tail(home: &std::path::Path) -> String {
+    use std::io::{Read, Seek, SeekFrom};
+    let Ok(mut f) = std::fs::File::open(home.join("session_index.jsonl")) else { return String::new() };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let cap = 512 * 1024;
+    let _ = f.seek(SeekFrom::Start(len.saturating_sub(cap)));
+    let mut buf = Vec::new();
+    let _ = f.read_to_end(&mut buf);
+    let s = String::from_utf8_lossy(&buf).into_owned();
+    if len > cap { s.split_once('\n').map(|x| x.1.to_string()).unwrap_or_default() } else { s }
+}
+
 fn load_chats() -> Vec<lq_core::model::ChatInfo> {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let names = thread_names(&read_index_tail(&codex_home()));
     recent_sessions(&codex_home().join("sessions")).into_iter().filter_map(|(p, age)| {
         let (head, tail) = read_ends(&p)?;
         let d = detail_from_lines(&head, &tail, now - age as i64);
-        let title = first_prompt(&read_head_text(&p)).or_else(|| d.prompt.clone()).unwrap_or_else(|| "Chat".into());
+        let stem = p.file_stem()?.to_string_lossy().to_string();
+        // Nome do chat; sem nome, o primeiro pedido.
+        let title = names.get(session_uuid(&stem)).cloned()
+            .or_else(|| first_prompt(&read_head_text(&p))).or_else(|| d.prompt.clone()).unwrap_or_else(|| "Chat".into());
         Some(lq_core::model::ChatInfo {
-            id: p.file_stem()?.to_string_lossy().to_string(),
+            id: stem,
             project: d.project.clone(), title,
             state: if age <= 8 { AgentState::Working } else { AgentState::Idle },
             detail: d,
@@ -301,6 +367,16 @@ pub fn chats() -> Vec<lq_core::model::ChatInfo> {
 #[cfg(test)]
 mod chat_tests {
     use super::*;
+
+    #[test]
+    fn chat_name_comes_from_the_session_index() {
+        let idx = concat!(r#"{"id":"aaaaaaaa-0000-0000-0000-000000000001","thread_name":"Velho"}"#, "\n",
+            r#"{"id":"aaaaaaaa-0000-0000-0000-000000000001","thread_name":"Corrige   o filtro"}"#, "\n", "lixo\n");
+        let m = thread_names(idx);
+        assert_eq!(m.get("aaaaaaaa-0000-0000-0000-000000000001").map(String::as_str), Some("Corrige o filtro"));
+        assert_eq!(session_uuid("rollout-2026-11-10T11-17-44-aaaaaaaa-0000-0000-0000-000000000001"), "aaaaaaaa-0000-0000-0000-000000000001");
+        assert_eq!(session_uuid("curto"), "curto");
+    }
 
     #[test]
     fn first_prompt_is_the_title() {

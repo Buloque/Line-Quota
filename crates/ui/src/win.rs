@@ -53,6 +53,7 @@ const ID_SHOW_WEEK: usize = 31;
 const ID_SHOW_ACTIVITY: usize = 32;
 const ID_SHOW_REMAINING: usize = 33;
 const ID_TRANSPARENT: usize = 34;
+const ID_SHOW_MONTH: usize = 35;
 const ID_PROVIDER: usize = 40; // +0 claude, +1 codex, +2 opencode
 const ID_ANCHOR: usize = 50; // +0 bandeja, +1 início, +2 centro
 const ID_AUTO: usize = 55;
@@ -68,6 +69,7 @@ const CHAT_WINDOWS: [u32; 6] = [10, 30, 60, 120, 360, 1440];
 const ID_OC_FREE: usize = 57;
 const ID_AUTOSTART: usize = 58;
 const ID_SETTINGS: usize = 94;
+const ID_LOCK: usize = 95;
 const ID_OPEN_CONFIG: usize = 90;
 const ID_REFRESH: usize = 91;
 const ID_RELOAD: usize = 92;
@@ -133,7 +135,8 @@ static FLY_ID: Mutex<Option<ProviderId>> = Mutex::new(None);
 const TIMER_FLY: usize = 2;
 const TIMER_FLY_CLICK: usize = 4; // verifica cliques fora do painel (rápido)
 
-struct Drag { cursor: (i32, i32), origin: (i32, i32), moved: bool }
+struct Drag { cursor: (i32, i32), origin: (i32, i32), moved: bool, /// false = barra travada: o clique nunca vira arrasto.
+    can_move: bool }
 
 /// Retorna false se já existe outra instância.
 pub fn single_instance() -> bool {
@@ -169,6 +172,10 @@ pub fn run(shared: Arc<Shared>, refresh: Sender<()>) -> windows::core::Result<()
         add_tray(hwnd);
         relayout(hwnd);
         SetTimer(hwnd, TIMER_POS, 1000, None);
+        SetTimer(hwnd, TIMER_RAISE, 250, None);
+        // Clicar na barra de tarefas a traz para frente do widget: reergue na hora (e de novo logo depois).
+        use windows::Win32::UI::Accessibility::SetWinEventHook;
+        let _ = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, None, Some(on_foreground), 0, 0, WINEVENT_OUTOFCONTEXT);
 
         let mut msg = MSG::default();
         while GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -177,6 +184,24 @@ pub fn run(shared: Arc<Shared>, refresh: Sender<()>) -> windows::core::Result<()
         }
     }
     Ok(())
+}
+
+const EVENT_SYSTEM_FOREGROUND: u32 = 0x0003;
+const TIMER_RAISE: usize = 5; // mantém o widget acima da barra de tarefas
+const TIMER_RAISE_SOON: usize = 6; // reerguida única logo após a barra de tarefas ganhar o foco
+
+/// Garante que o widget continua visível por cima da barra (o Windows a reergue ao ser clicada).
+unsafe fn raise(hwnd: HWND) {
+    if DRAGGING.load(Ordering::Relaxed) || !IsWindowVisible(hwnd).as_bool() { return; }
+    let _ = SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+}
+
+unsafe extern "system" fn on_foreground(_: windows::Win32::UI::Accessibility::HWINEVENTHOOK, _: u32, _: HWND, _: i32, _: i32, _: u32, _: u32) {
+    let Some(ctx) = CTX.get() else { return };
+    let h = HWND(ctx.shared.hwnd.load(Ordering::Relaxed) as *mut _);
+    if h.0.is_null() { return; }
+    raise(h);
+    SetTimer(h, TIMER_RAISE_SOON, 60, None);
 }
 
 fn wide(s: &str) -> Vec<u16> { s.encode_utf16().collect() }
@@ -681,110 +706,24 @@ unsafe fn add(menu: HMENU, id: usize, text: &str, checked: bool) {
     let _ = AppendMenuW(menu, flags, id, PCWSTR(wide0(text).as_ptr()));
 }
 
-unsafe fn add_sub(menu: HMENU, text: &str, sub: HMENU) {
-    let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, PCWSTR(wide0(text).as_ptr()));
-}
 
+/// Menu do botão direito: só o essencial. O resto fica na janela de configurações.
 unsafe fn show_menu(hwnd: HWND) {
     let Some(ctx) = CTX.get() else { return };
-    let cfg = ctx.shared.config.lock().unwrap().clone();
-    let u = &cfg.ui;
-    let (Ok(menu), Ok(m_disp), Ok(m_lab), Ok(m_show), Ok(m_prov), Ok(m_pos), Ok(m_mon), Ok(m_auto)) = (
-        CreatePopupMenu(), CreatePopupMenu(), CreatePopupMenu(), CreatePopupMenu(),
-        CreatePopupMenu(), CreatePopupMenu(), CreatePopupMenu(), CreatePopupMenu(),
-    ) else { return };
-
-    add(m_disp, ID_DISPLAY, "Número", u.display == DisplayMode::Number);
-    add(m_disp, ID_DISPLAY + 1, "Barra de progresso", u.display == DisplayMode::Bar);
-    add(m_disp, ID_DISPLAY + 2, "Barra + número", u.display == DisplayMode::Both);
-    let _ = AppendMenuW(m_disp, MF_SEPARATOR, 0, PCWSTR::null());
-    add(m_disp, ID_TRANSPARENT, "Fundo transparente", u.transparent);
-    add(m_lab, ID_LABELS, "Ícone", u.labels == LabelStyle::Icon);
-    add(m_lab, ID_LABELS + 1, "Texto (Cl / Cx)", u.labels == LabelStyle::Text);
-    add(m_show, ID_SHOW_5H, "Limite de 5 horas", cfg.claude.show_five_hour);
-    add(m_show, ID_SHOW_WEEK, "Limite semanal", cfg.claude.show_weekly);
-    add(m_show, ID_SHOW_ACTIVITY, "Tarefa ativa / aguardando resposta", cfg.claude.show_activity);
-    add(m_show, ID_SHOW_REMAINING, "Mostrar o que resta (em vez do usado)", u.show_remaining);
-    add(m_prov, ID_PROVIDER, "Claude Code", cfg.claude.enabled);
-    add(m_prov, ID_PROVIDER + 1, "Codex", cfg.codex.enabled);
-    add(m_prov, ID_PROVIDER + 2, "OpenCode", cfg.opencode.enabled);
-    add(m_prov, ID_OC_FREE, "OpenCode gratuito: só o ícone", u.opencode_free_icon_only);
-    add(m_auto, ID_AUTO, "Ativado: mostrar só o que está aberto", u.auto_mode);
-    add(m_auto, ID_AUTO_HIDE, "Ocultar o widget se nada estiver aberto", u.auto_hide_when_none);
-    add(m_pos, ID_ANCHOR, "Ao lado da bandeja", u.anchor == Anchor::BesideTray);
-    add(m_pos, ID_ANCHOR + 1, "Início da barra", u.anchor == Anchor::TaskbarStart);
-    add(m_pos, ID_ANCHOR + 2, "Centro da barra", u.anchor == Anchor::TaskbarCenter);
-    let _ = AppendMenuW(m_pos, MF_SEPARATOR, 0, PCWSTR::null());
-    let free = wide0("Livre: arraste o widget ao longo da barra");
-    let free_flags = if u.anchor == Anchor::Custom { MF_STRING | MF_CHECKED | MF_GRAYED } else { MF_STRING | MF_GRAYED };
-    let _ = AppendMenuW(m_pos, free_flags, 0, PCWSTR(free.as_ptr()));
-    add(m_mon, ID_MONITOR, "Automático (monitor da barra principal)", u.monitor == 0);
-    for (i, m) in monitors().iter().enumerate() {
-        let name = format!("Monitor {}{}", i + 1, if m.primary { " (principal)" } else { "" });
-        add(m_mon, ID_MONITOR + 1 + i, &name, u.monitor as usize == i + 1);
-    }
-
-    add(menu, ID_SETTINGS, "Configurações…", false);
+    let locked = ctx.shared.config.lock().unwrap().ui.locked;
+    let Ok(menu) = CreatePopupMenu() else { return };
+    add(menu, ID_LOCK, if locked { "Destravar barra" } else { "Travar barra" }, false);
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-    if let Ok(m_win) = CreatePopupMenu() {
-        for (i, m) in CHAT_WINDOWS.iter().enumerate() {
-            add(m_win, ID_CHATWIN + i, &crate::view::fmt_window(*m), u.chat_window_mins == *m);
-        }
-        add_sub(menu, "Chats no painel (período)", m_win);
-    }
-    add_sub(menu, "Exibição", m_disp);
-    add_sub(menu, "Identificação do provedor", m_lab);
-    if let Ok(m_font) = CreatePopupMenu() {
-        for (i, name) in FONTS.iter().enumerate().filter(|(_, n)| font_installed(n)) {
-            add(m_font, ID_FONT + i, name, u.font == *name);
-        }
-        add_sub(menu, "Fonte", m_font);
-    }
-    add_sub(menu, "Mostrar", m_show);
-    add_sub(menu, "Provedores", m_prov);
-    add_sub(menu, "Modo automático", m_auto);
-    if let (Ok(m_alert), Ok(m_thr)) = (CreatePopupMenu(), CreatePopupMenu()) {
-        let a = &cfg.alerts;
-        add(m_alert, ID_ALERT_ENABLED, "Alertas ativados", a.enabled);
-        add(m_alert, ID_ALERT_TOAST, "Mostrar notificações do Windows", a.toast);
-        add(m_alert, ID_ALERT_SOUND, "Tocar som", a.sound);
-        let _ = AppendMenuW(m_alert, MF_SEPARATOR, 0, PCWSTR::null());
-        add(m_alert, ID_ALERT_RESET, "Avisar quando o limite renovar", a.notify_reset);
-        add(m_alert, ID_ALERT_DONE, "Avisar quando a tarefa terminar", a.notify_task_done);
-        add(m_alert, ID_ALERT_INPUT, "Avisar quando precisar de resposta", a.notify_needs_input);
-        for (i, p) in THRESHOLD_PRESETS.iter().enumerate() {
-            let label = format!("Limites: {}", p.iter().map(|t| format!("{t:.0}%")).collect::<Vec<_>>().join(" / "));
-            add(m_thr, ID_THRESH + i, &label, a.thresholds == *p);
-        }
-        add_sub(m_alert, "Avisar quando o uso passar de", m_thr);
-        let _ = AppendMenuW(m_alert, MF_SEPARATOR, 0, PCWSTR::null());
-        add(m_alert, ID_ALERT_TEST, "Testar notificação", false);
-        add_sub(menu, "Alertas", m_alert);
-    }
-    add_sub(menu, "Posição", m_pos);
-    add_sub(menu, "Monitor", m_mon);
-    if let Ok(m_acc) = CreatePopupMenu() {
-        let logged = ctx.shared.account.logged_in();
-        let status = wide0(if logged { "Claude: conectado" } else { "Claude: não conectado" });
-        let _ = AppendMenuW(m_acc, MF_STRING | MF_GRAYED, 0, PCWSTR(status.as_ptr()));
-        let _ = AppendMenuW(m_acc, MF_SEPARATOR, 0, PCWSTR::null());
-        add(m_acc, ID_CLAUDE_LOGIN, "Entrar no Claude (abre o navegador)", false);
-        add(m_acc, ID_CLAUDE_PASTE, "Colar código copiado", false);
-        let out = wide0("Sair da conta Claude");
-        let _ = AppendMenuW(m_acc, if logged { MF_STRING } else { MF_STRING | MF_GRAYED }, ID_CLAUDE_LOGOUT, PCWSTR(out.as_ptr()));
-        add_sub(menu, "Conta Claude", m_acc);
-    }
+    add(menu, ID_REFRESH, "Atualizar", false);
+    add(menu, ID_SETTINGS, "Abrir configurações", false);
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-    add(menu, ID_OPEN_CONFIG, "Abrir arquivo de configuração", false);
-    add(menu, ID_RELOAD, "Recarregar configuração", false);
-    add(menu, ID_REFRESH, "Atualizar agora", false);
     add(menu, ID_QUIT, "Sair", false);
 
     let mut pt = POINT::default();
     let _ = GetCursorPos(&mut pt);
     let _ = SetForegroundWindow(hwnd);
     let _ = TrackPopupMenu(menu, TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, None);
-    let _ = DestroyMenu(menu); // destrói também os submenus
+    let _ = DestroyMenu(menu);
 }
 
 fn open_url(url: &str) {
@@ -898,6 +837,8 @@ unsafe fn apply_command(hwnd: HWND, id: usize) -> bool {
             x if x == ID_LABELS + 1 => c.ui.labels = LabelStyle::Text,
             ID_SHOW_5H => { let v = !c.claude.show_five_hour; for p in c.providers_mut() { p.show_five_hour = v; } }
             ID_SHOW_WEEK => { let v = !c.claude.show_weekly; for p in c.providers_mut() { p.show_weekly = v; } }
+            ID_SHOW_MONTH => { let v = !c.claude.show_monthly; for p in c.providers_mut() { p.show_monthly = v; } }
+            ID_LOCK => c.ui.locked = !c.ui.locked,
             ID_SHOW_ACTIVITY => { let v = !c.claude.show_activity; for p in c.providers_mut() { p.show_activity = v; } }
             ID_SHOW_REMAINING => c.ui.show_remaining = !c.ui.show_remaining,
             ID_PROVIDER => c.claude.enabled = !c.claude.enabled,
@@ -964,6 +905,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
         WM_ERASEBKGND => LRESULT(1),
         WM_UPDATE => { relayout(hwnd); update_tray(hwnd); LRESULT(0) }
         WM_TOAST => { show_toasts(hwnd); LRESULT(0) }
+        WM_TIMER if wp.0 == TIMER_RAISE => { raise(hwnd); LRESULT(0) }
+        WM_TIMER if wp.0 == TIMER_RAISE_SOON => { let _ = KillTimer(hwnd, TIMER_RAISE_SOON); raise(hwnd); LRESULT(0) }
         WM_TIMER => { relayout(hwnd); LRESULT(0) } // acompanha mudanças da barra (posição, DPI, auto-hide, tema)
         WM_DISPLAYCHANGE | WM_SETTINGCHANGE | WM_DPICHANGED => { relayout(hwnd); LRESULT(0) }
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
@@ -971,12 +914,22 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             let mut pt = POINT::default();
             let _ = GetCursorPos(&mut pt);
             let o = rect_of(hwnd).map_or((0, 0), |r| (r.l, r.t));
-            *DRAG.lock().unwrap() = Some(Drag { cursor: (pt.x, pt.y), origin: o, moved: false });
+            let can_move = CTX.get().map_or(false, |c| !c.shared.config.lock().unwrap().ui.locked);
+            *DRAG.lock().unwrap() = Some(Drag { cursor: (pt.x, pt.y), origin: o, moved: false, can_move });
             SetCapture(hwnd);
             LRESULT(0)
         }
+        WM_CAPTURECHANGED => {
+            // Perdeu a captura no meio de um clique/arrasto (ex.: clique na barra de tarefas): encerra sem travar o relayout.
+            let d = DRAG.lock().unwrap().take();
+            if let Some(d) = d {
+                DRAGGING.store(false, Ordering::Relaxed);
+                if d.moved { finish_drag(hwnd); LAST_FRAME.lock().unwrap().clear(); relayout(hwnd); }
+            }
+            LRESULT(0)
+        }
         WM_MOUSEMOVE => {
-            if let Some(d) = DRAG.lock().unwrap().as_mut() {
+            if let Some(d) = DRAG.lock().unwrap().as_mut().filter(|d| d.can_move) {
                 let mut pt = POINT::default();
                 let _ = GetCursorPos(&mut pt);
                 let (dx, dy) = (pt.x - d.cursor.0, pt.y - d.cursor.1);
@@ -989,8 +942,8 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) 
             LRESULT(0)
         }
         WM_LBUTTONUP => {
+            let d = DRAG.lock().unwrap().take(); // antes de soltar a captura (que dispara WM_CAPTURECHANGED)
             let _ = ReleaseCapture();
-            let d = DRAG.lock().unwrap().take();
             DRAGGING.store(false, Ordering::Relaxed);
             match d {
                 Some(d) if d.moved => { finish_drag(hwnd); LAST_FRAME.lock().unwrap().clear(); relayout(hwnd); }
@@ -1372,3 +1325,30 @@ pub fn unregister_uninstall() {
 /// Caixa de mensagem e pergunta Sim/Não (o app não tem console).
 pub fn info_box(title: &str, text: &str) { message(title, text) }
 pub fn ask(title: &str, text: &str) -> bool { ask_yes_no(title, text) }
+
+/// Diálogo de confirmação do Windows (TaskDialog) com botões "<ok>" / "Cancelar" e uma caixa de marcação.
+/// Retorna `Some(caixa marcada)` se o usuário confirmou e `None` se cancelou/fechou.
+pub fn confirm_with_check(title: &str, heading: &str, text: &str, ok: &str, check: &str, check_default: bool) -> Option<bool> {
+    use windows::Win32::UI::Controls::*;
+    const ID_OK: i32 = 1001;
+    const ID_CANCEL: i32 = 1002;
+    let (t, h, c, okw, cancel, chk) = (wide0(title), wide0(heading), wide0(text), wide0(ok), wide0("Cancelar"), wide0(check));
+    let buttons = [
+        TASKDIALOG_BUTTON { nButtonID: ID_OK, pszButtonText: PCWSTR(okw.as_ptr()) },
+        TASKDIALOG_BUTTON { nButtonID: ID_CANCEL, pszButtonText: PCWSTR(cancel.as_ptr()) },
+    ];
+    let mut cfg = TASKDIALOGCONFIG::default();
+    cfg.cbSize = std::mem::size_of::<TASKDIALOGCONFIG>() as u32;
+    cfg.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_POSITION_RELATIVE_TO_WINDOW
+        | if check_default { TDF_VERIFICATION_FLAG_CHECKED } else { TASKDIALOG_FLAGS(0) };
+    cfg.pszWindowTitle = PCWSTR(t.as_ptr());
+    cfg.pszMainInstruction = PCWSTR(h.as_ptr());
+    cfg.pszContent = PCWSTR(c.as_ptr());
+    cfg.pszVerificationText = PCWSTR(chk.as_ptr());
+    cfg.pButtons = buttons.as_ptr();
+    cfg.cButtons = buttons.len() as u32;
+    cfg.nDefaultButton = ID_OK;
+    let (mut pressed, mut checked) = (0i32, BOOL(0));
+    unsafe { TaskDialogIndirect(&cfg, Some(&mut pressed), None, Some(&mut checked)).ok()?; }
+    (pressed == ID_OK).then_some(checked.as_bool())
+}

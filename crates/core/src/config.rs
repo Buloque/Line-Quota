@@ -7,6 +7,8 @@ pub struct ProviderConfig {
     pub enabled: bool,
     pub show_five_hour: bool,
     pub show_weekly: bool,
+    /// Limite mensal (Codex no plano gratuito).
+    pub show_monthly: bool,
     pub show_activity: bool,
     pub refresh_idle_secs: u64,
     pub refresh_active_secs: u64,
@@ -16,7 +18,7 @@ pub struct ProviderConfig {
 
 impl Default for ProviderConfig {
     fn default() -> Self {
-        Self { enabled: true, show_five_hour: true, show_weekly: true, show_activity: true,
+        Self { enabled: true, show_five_hour: true, show_weekly: true, show_monthly: true, show_activity: true,
                refresh_idle_secs: 300, refresh_active_secs: 60, processes: Vec::new() }
     }
 }
@@ -87,6 +89,8 @@ pub struct UiConfig {
     /// No modo automático, oculta o widget quando nenhum programa está aberto
     /// (desligado = mostra todos).
     pub auto_hide_when_none: bool,
+    /// Posição travada: o widget não é arrastado por clique acidental (destrave pelo menu).
+    pub locked: bool,
     /// Fonte do widget (se não estiver instalada, usa Segoe UI).
     pub font: String,
     /// OpenCode sem plano pago (sem limites a medir): mostra só o ícone; desligado mostra "grátis".
@@ -100,7 +104,7 @@ impl Default for UiConfig {
         Self { compact: true, show_remaining: false, exact_reset_time: false, autostart: true,
                display: DisplayMode::Both, labels: LabelStyle::Icon, anchor: Anchor::BesideTray,
                monitor: 0, bar_offset: 0, transparent: true, auto_mode: false, auto_hide_when_none: false,
-               font: "Segoe UI Variable Text".into(), opencode_free_icon_only: true, chat_window_mins: 30 }
+               locked: true, font: "Calibri".into(), opencode_free_icon_only: true, chat_window_mins: 30 }
     }
 }
 
@@ -194,6 +198,16 @@ mod tests {
     fn custom_processes_are_kept() {
         let c = Config::from_toml("[codex]\nprocesses = [\"meucodex.exe\"]").unwrap();
         assert_eq!(c.codex.processes, vec!["meucodex.exe"]);
+    }
+
+    #[test]
+    fn defaults_lock_the_bar_use_calibri_and_show_monthly() {
+        let c = Config::default();
+        assert!(c.ui.locked && c.codex.show_monthly);
+        assert_eq!(c.ui.font, "Calibri");
+        // configs antigas (sem os campos novos) também vêm travadas e com o limite mensal ligado
+        let old = Config::from_toml("[ui]\nanchor = \"custom\"\nbar_offset = 300").unwrap();
+        assert!(old.ui.locked && old.claude.show_monthly);
     }
 
     #[test]

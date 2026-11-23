@@ -40,6 +40,8 @@ fn report(quiet: bool, title: &str, text: &str) {
     if quiet { eprintln!("{text}"); } else { win::info_box(title, text); }
 }
 
+/// Instala (ou atualiza) o app por usuário. Claude Code, Codex e OpenCode são opcionais:
+/// problemas na integração com o Claude viram aviso, nunca abortam a instalação.
 pub fn install_app(quiet: bool, autostart: bool) {
     let dir = install_dir();
     let target = dir.join(EXE_NAME);
@@ -50,20 +52,40 @@ pub fn install_app(quiet: bool, autostart: bool) {
         let same = std::fs::canonicalize(&me).ok() == std::fs::canonicalize(&target).ok();
         if !same { copy_with_retry(&me, &target).map_err(|e| format!("não consegui copiar o programa: {e}"))?; }
         let mut log = vec![format!("programa em {}", target.display())];
-        log.extend(install::install_for(&target).map_err(|e| format!("hooks do Claude: {e}"))?);
+        match install::install_for(&target) {
+            Ok(l) => log.extend(l),
+            Err(e) => log.push(format!("Aviso: não consegui configurar o Claude Code ({e}). O widget funciona sem isso.")),
+        }
         win::unregister_toast_identity(); // o app recria o atalho do Menu Iniciar apontando para o novo caminho
         win::set_autostart_for(&target, autostart);
         win::register_uninstall(&dir, &target, env!("CARGO_PKG_VERSION"));
         Ok(log)
     })();
     match result {
-        Ok(_) => {
+        Ok(log) => {
             let _ = Command::new(&target).current_dir(&dir).creation_flags(DETACHED | CREATE_NO_WINDOW).spawn();
+            let notes: String = log.iter().filter(|l| l.starts_with("Aviso") || l.starts_with("Claude Code não")).map(|l| format!("\n\n{l}")).collect();
             report(quiet, "Line Quota",
-                &format!("Instalado!\n\nO widget já está na barra de tarefas.\n\nPasta: {}\nInício com o Windows: {}\n\nPara remover: Configurações do Windows > Aplicativos instalados > Line Quota.",
+                &format!("Instalado!\n\nO widget já está na barra de tarefas.\n\nPasta: {}\nInício com o Windows: {}{notes}\n\nPara remover: Configurações do Windows > Aplicativos instalados > Line Quota.",
                     dir.display(), if autostart { "ligado" } else { "desligado" }));
         }
         Err(e) => report(quiet, "Line Quota — erro na instalação", &e),
+    }
+}
+
+/// Assistente de instalação (duplo clique no `LineQuota-Setup.exe`): confirma, pergunta do início
+/// com o Windows e instala. Cancelar não altera nada.
+pub fn install_wizard() {
+    let dir = install_dir();
+    let update = dir.join(EXE_NAME).is_file();
+    let text = format!(
+        "O Line Quota mostra na barra de tarefas os limites do Claude Code, Codex e OpenCode.\n\n\
+         Nenhum deles é obrigatório e não é preciso ser administrador.\n\nPasta: {}",
+        dir.display());
+    let heading = if update { "Atualizar o Line Quota" } else { "Instalar o Line Quota" };
+    if let Some(autostart) = win::confirm_with_check("Line Quota — Instalação", heading, &text,
+        if update { "Atualizar" } else { "Instalar" }, "Iniciar com o Windows", true) {
+        install_app(false, autostart);
     }
 }
 
@@ -91,12 +113,35 @@ pub fn uninstall_app(quiet: bool, purge: bool) {
         &format!("Line Quota removido.{}", if purge { String::new() } else { format!("\n\nSuas configurações foram mantidas em {}.", cfg.display()) }));
 }
 
+/// Desinstalador interativo (Aplicativos instalados do Windows): confirma e oferece apagar as configurações.
+pub fn uninstall_wizard(purge_default: bool) {
+    let cfg = PathBuf::from(std::env::var("APPDATA").unwrap_or_default()).join("LineQuota");
+    let text = format!(
+        "Remove o programa, o início com o Windows e a integração com o Claude Code.\n\nSuas configurações ficam em {}.",
+        cfg.display());
+    if let Some(purge) = win::confirm_with_check("Line Quota — Desinstalação", "Remover o Line Quota?", &text,
+        "Remover", "Apagar também minhas configurações e dados (purge)", purge_default) {
+        uninstall_app(false, purge);
+    }
+}
+
+/// O .exe foi baixado como instalador (`LineQuota-Setup-*.exe`)? Então abre o assistente em vez do widget.
+pub fn is_setup_exe() -> bool {
+    let me = std::env::current_exe().unwrap_or_default();
+    let same = std::fs::canonicalize(&me).ok() == std::fs::canonicalize(install_dir().join(EXE_NAME)).ok();
+    !same && me.file_stem().is_some_and(|s| s.to_string_lossy().to_lowercase().contains("setup"))
+}
+
 /// Interpreta `--install [--quiet] [--no-autostart]` / `--uninstall [--quiet] [--purge]`.
+/// Sem `--quiet` o assistente pergunta o necessário; com `--quiet` age direto (scripts).
 pub fn run(args: &[String]) -> bool {
     let has = |f: &str| args.iter().any(|a| a == f);
     match args.first().map(String::as_str) {
-        Some("--install") => { install_app(has("--quiet"), !has("--no-autostart")); true }
-        Some("--uninstall") => { uninstall_app(has("--quiet"), has("--purge")); true }
+        Some("--install") if has("--quiet") => { install_app(true, !has("--no-autostart")); true }
+        Some("--install") => { if has("--no-autostart") { install_app(false, false) } else { install_wizard() } true }
+        Some("--uninstall") if has("--quiet") => { uninstall_app(true, has("--purge")); true }
+        Some("--uninstall") => { uninstall_wizard(has("--purge")); true }
+        None if is_setup_exe() => { install_wizard(); true }
         _ => false,
     }
 }
