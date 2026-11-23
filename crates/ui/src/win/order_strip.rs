@@ -5,7 +5,7 @@ use super::*;
 use std::sync::Mutex;
 use windows::Win32::UI::Input::KeyboardAndMouse::{TrackMouseEvent, TRACKMOUSEEVENT, TME_LEAVE};
 
-const TILE_W: i32 = 62;
+const TILE_W: i32 = 56;
 const TILE_H: i32 = 68;
 const ICON: i32 = 26;
 
@@ -51,7 +51,7 @@ unsafe fn paint(hwnd: HWND) {
     let old_bmp = SelectObject(mem, bmp);
     let dark = DARK.load(Ordering::Relaxed);
     fill(mem, &rc, bg_color(dark));
-    let font = CreateFontW(-scale(10), 0, 0, 0, 400, 0, 0, 0, DEFAULT_CHARSET.0 as u32, OUT_DEFAULT_PRECIS.0 as u32,
+    let font = CreateFontW(-scale(9), 0, 0, 0, 400, 0, 0, 0, DEFAULT_CHARSET.0 as u32, OUT_DEFAULT_PRECIS.0 as u32,
         CLIP_DEFAULT_PRECIS.0 as u32, CLEARTYPE_QUALITY.0 as u32, 0, w!("Segoe UI"));
     let old_font = SelectObject(mem, font);
     SetBkMode(mem, TRANSPARENT);
