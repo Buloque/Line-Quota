@@ -1,4 +1,4 @@
-//! Janela de configurações (controles nativos do Windows). Cada controle reaproveita o ID de
+﻿//! Janela de configurações (controles nativos do Windows). Cada controle reaproveita o ID de
 //! comando do menu: o clique vira um WM_COMMAND para a janela do widget, que aplica e salva.
 use super::*;
 
@@ -9,7 +9,7 @@ const ID_CLOSE: usize = 999;
 const TIMER_SYNC: usize = 3;
 
 /// Comboboxes: o ID do controle é a base do comando; o item escolhido soma ao ID.
-const COMBOS: [usize; 8] = [ID_BARSTYLE, ID_DISPLAY, ID_LABELS, ID_FONT, ID_ANCHOR, ID_MONITOR, ID_THRESH, ID_CHATWIN];
+const COMBOS: [usize; 9] = [ID_ACTSTYLE, ID_BARSTYLE, ID_DISPLAY, ID_LABELS, ID_FONT, ID_ANCHOR, ID_MONITOR, ID_THRESH, ID_CHATWIN];
 
 unsafe fn mk(parent: HWND, class: PCWSTR, text: &str, style: u32, r: (i32, i32, i32, i32), id: usize) -> HWND {
     let hinst = GetModuleHandleW(None).unwrap_or_default();
@@ -60,7 +60,7 @@ pub(super) unsafe fn open(tile: HWND) {
         CLIP_DEFAULT_PRECIS.0 as u32, CLEARTYPE_QUALITY.0 as u32, 0, w!("Segoe UI"));
     SET_FONT.store(f.0 as isize, Ordering::Relaxed);
 
-    let (cw, ch) = (scale(648), scale(684));
+    let (cw, ch) = (scale(648), scale(578));
     let mut rc = RECT { left: 0, top: 0, right: cw, bottom: ch };
     let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
     let _ = AdjustWindowRectEx(&mut rc, style, false, WINDOW_EX_STYLE(0));
@@ -70,77 +70,79 @@ pub(super) unsafe fn open(tile: HWND) {
         ((sw - ww) / 2).max(0), ((sh - wh) / 2).max(0), ww, wh, None, None, hinst, None) else { return };
     SET_HWND.store(h.0 as isize, Ordering::Relaxed);
 
-    // Coluna esquerda: aparência, posição, alertas.
+    // Coluna esquerda: aparência e alertas.
     let (lx, lw) = (12, 300);
-    group(h, "Aparência", lx, 8, lw, 290);
-    label(h, "Exibição", lx + 12, 28, 90);
-    combo(h, lx + 110, 28, 176, ID_DISPLAY, &["Número", "Gráfico", "Gráfico + número"]);
-    label(h, "Gráfico", lx + 12, 58, 90);
-    combo(h, lx + 110, 58, 176, ID_BARSTYLE, &["Barra horizontal", "Barra vertical", "Círculo", "Blocos"]);
-    label(h, "Identificação", lx + 12, 88, 90);
-    combo(h, lx + 110, 88, 176, ID_LABELS, &["Ícone", "Texto (Cl / Cx)", "Nenhuma"]);
-    label(h, "Fonte", lx + 12, 118, 90);
-    let fc = combo(h, lx + 110, 118, 176, ID_FONT, &[]);
+    group(h, "Aparência", lx, 8, lw, 296);
+    label(h, "Exibição", lx + 12, 26, 90);
+    combo(h, lx + 110, 26, 176, ID_DISPLAY, &["Número", "Gráfico", "Gráfico + número"]);
+    label(h, "Gráfico", lx + 12, 54, 90);
+    combo(h, lx + 110, 54, 176, ID_BARSTYLE, &["Barra horizontal", "Barra vertical", "Círculo", "Blocos"]);
+    label(h, "Identificação", lx + 12, 82, 90);
+    combo(h, lx + 110, 82, 176, ID_LABELS, &["Ícone", "Texto (Cl / Cx)", "Nenhuma"]);
+    label(h, "Fonte", lx + 12, 110, 90);
+    let fc = combo(h, lx + 110, 110, 176, ID_FONT, &[]);
     for (i, n) in FONTS.iter().enumerate().filter(|(_, n)| font_installed(n)) {
         let idx = SendMessageW(fc, CB_ADDSTRING, WPARAM(0), LPARAM(wide0(n).as_ptr() as isize)).0;
         SendMessageW(fc, CB_SETITEMDATA, WPARAM(idx as usize), LPARAM(i as isize));
     }
-    check(h, "Fundo transparente", lx + 12, 150, 270, ID_TRANSPARENT);
-    check(h, "Mostrar rótulos (5h / 7d / 30d)", lx + 12, 174, 270, ID_TAGS);
-    check(h, "Mostrar o que resta (em vez do usado)", lx + 12, 198, 270, ID_SHOW_REMAINING);
-    check(h, "Limite de 5 horas", lx + 12, 222, 270, ID_SHOW_5H);
-    check(h, "Limite semanal", lx + 12, 246, 270, ID_SHOW_WEEK);
-    check(h, "Tarefa ativa / aguardando resposta", lx + 12, 270, 270, ID_SHOW_ACTIVITY);
+    label(h, "Atividade", lx + 12, 138, 90);
+    combo(h, lx + 110, 138, 176, ID_ACTSTYLE, &["Ponto grande", "Ponto pequeno"]);
+    check(h, "Fundo transparente", lx + 12, 170, 270, ID_TRANSPARENT);
+    check(h, "Mostrar rótulos (5h / 7d / 30d)", lx + 12, 192, 270, ID_TAGS);
+    check(h, "Mostrar o que resta (em vez do usado)", lx + 12, 214, 270, ID_SHOW_REMAINING);
+    check(h, "Limite de 5 horas", lx + 12, 236, 270, ID_SHOW_5H);
+    check(h, "Limite semanal", lx + 12, 258, 270, ID_SHOW_WEEK);
+    check(h, "Tarefa ativa / aguardando resposta", lx + 12, 280, 270, ID_SHOW_ACTIVITY);
 
-    group(h, "Posição", lx, 306, lw, 122);
-    label(h, "Na barra", lx + 12, 326, 90);
-    combo(h, lx + 110, 326, 176, ID_ANCHOR, &["Ao lado da bandeja", "Início da barra", "Centro da barra", "Livre (arrastar)"]);
-    label(h, "Monitor", lx + 12, 356, 90);
-    let mc = combo(h, lx + 110, 356, 176, ID_MONITOR, &["Automático"]);
+    group(h, "Alertas", lx, 312, lw, 216);
+    check(h, "Alertas ativados", lx + 12, 332, 270, ID_ALERT_ENABLED);
+    check(h, "Mostrar notificações do Windows", lx + 12, 354, 270, ID_ALERT_TOAST);
+    check(h, "Tocar som", lx + 12, 376, 270, ID_ALERT_SOUND);
+    check(h, "Avisar quando o limite renovar", lx + 12, 398, 270, ID_ALERT_RESET);
+    check(h, "Avisar quando a tarefa terminar", lx + 12, 420, 270, ID_ALERT_DONE);
+    check(h, "Avisar quando precisar de resposta", lx + 12, 442, 270, ID_ALERT_INPUT);
+    label(h, "Avisar acima de", lx + 12, 470, 100);
+    let labels: Vec<String> = THRESHOLD_PRESETS.iter()
+        .map(|p| p.iter().map(|t| format!("{t:.0}%")).collect::<Vec<_>>().join(" / ")).collect();
+    combo(h, lx + 110, 470, 176, ID_THRESH, &labels.iter().map(String::as_str).collect::<Vec<_>>());
+    push(h, "Testar notificação", lx + 12, 496, 150, ID_ALERT_TEST);
+
+    // Coluna direita: provedores, conta, posição, sistema.
+    let (rx, rw) = (324, 312);
+    group(h, "Provedores", rx, 8, rw, 148);
+    check(h, "Claude Code", rx + 12, 26, 285, ID_PROVIDER);
+    check(h, "Codex", rx + 12, 48, 285, ID_PROVIDER + 1);
+    check(h, "OpenCode", rx + 12, 70, 285, ID_PROVIDER + 2);
+    check(h, "Modo automático (só o que está aberto)", rx + 12, 98, 285, ID_AUTO);
+    check(h, "Ocultar o widget se nada estiver aberto", rx + 28, 120, 270, ID_AUTO_HIDE);
+
+    group(h, "Conta Claude", rx, 164, rw, 104);
+    mk(h, w!("STATIC"), "", 0, (rx + 12, 184, rw - 24, 18), ID_STATUS);
+    push(h, "Entrar (abre o navegador)", rx + 12, 206, 180, ID_CLAUDE_LOGIN);
+    push(h, "Colar código", rx + 200, 206, 100, ID_CLAUDE_PASTE);
+    push(h, "Sair da conta Claude", rx + 12, 236, 180, ID_CLAUDE_LOGOUT);
+
+    group(h, "Posição", rx, 276, rw, 116);
+    label(h, "Na barra", rx + 12, 294, 90);
+    combo(h, rx + 110, 294, 190, ID_ANCHOR, &["Ao lado da bandeja", "Início da barra", "Centro da barra", "Livre (arrastar)"]);
+    label(h, "Monitor", rx + 12, 322, 90);
+    let mc = combo(h, rx + 110, 322, 190, ID_MONITOR, &["Automático"]);
     for (i, m) in monitors().iter().enumerate() {
         let n = format!("Monitor {}{}", i + 1, if m.primary { " (principal)" } else { "" });
         SendMessageW(mc, CB_ADDSTRING, WPARAM(0), LPARAM(wide0(&n).as_ptr() as isize));
     }
-    check(h, "Travar a posição na barra", lx + 12, 392, 270, ID_LOCK);
+    check(h, "Travar a posição na barra", rx + 12, 356, 285, ID_LOCK);
 
-    group(h, "Alertas", lx, 436, lw, 238);
-    check(h, "Alertas ativados", lx + 12, 456, 270, ID_ALERT_ENABLED);
-    check(h, "Mostrar notificações do Windows", lx + 12, 480, 270, ID_ALERT_TOAST);
-    check(h, "Tocar som", lx + 12, 504, 270, ID_ALERT_SOUND);
-    check(h, "Avisar quando o limite renovar", lx + 12, 528, 270, ID_ALERT_RESET);
-    check(h, "Avisar quando a tarefa terminar", lx + 12, 552, 270, ID_ALERT_DONE);
-    check(h, "Avisar quando precisar de resposta", lx + 12, 576, 270, ID_ALERT_INPUT);
-    label(h, "Avisar acima de", lx + 12, 606, 100);
-    let labels: Vec<String> = THRESHOLD_PRESETS.iter()
-        .map(|p| p.iter().map(|t| format!("{t:.0}%")).collect::<Vec<_>>().join(" / ")).collect();
-    combo(h, lx + 110, 606, 176, ID_THRESH, &labels.iter().map(String::as_str).collect::<Vec<_>>());
-    push(h, "Testar notificação", lx + 12, 638, 150, ID_ALERT_TEST);
-
-    // Coluna direita: provedores, conta, sistema.
-    let (rx, rw) = (324, 312);
-    group(h, "Provedores", rx, 8, rw, 168);
-    check(h, "Claude Code", rx + 12, 28, 285, ID_PROVIDER);
-    check(h, "Codex", rx + 12, 52, 285, ID_PROVIDER + 1);
-    check(h, "OpenCode", rx + 12, 76, 285, ID_PROVIDER + 2);
-    check(h, "Modo automático (só o que está aberto)", rx + 12, 110, 285, ID_AUTO);
-    check(h, "Ocultar o widget se nada estiver aberto", rx + 28, 134, 270, ID_AUTO_HIDE);
-
-    group(h, "Conta Claude", rx, 184, rw, 112);
-    mk(h, w!("STATIC"), "", 0, (rx + 12, 206, rw - 24, 18), ID_STATUS);
-    push(h, "Entrar (abre o navegador)", rx + 12, 230, 180, ID_CLAUDE_LOGIN);
-    push(h, "Colar código", rx + 200, 230, 100, ID_CLAUDE_PASTE);
-    push(h, "Sair da conta Claude", rx + 12, 260, 180, ID_CLAUDE_LOGOUT);
-
-    group(h, "Sistema", rx, 304, rw, 148);
-    check(h, "Iniciar com o Windows", rx + 12, 324, 285, ID_AUTOSTART);
-    push(h, "Atualizar agora", rx + 12, 354, 140, ID_REFRESH);
-    push(h, "Abrir config.toml", rx + 160, 354, 140, ID_OPEN_CONFIG);
-    push(h, "Recarregar do arquivo", rx + 12, 386, 140, ID_RELOAD);
-    label(h, "Chats no painel: últimos", rx + 12, 422, 150);
+    group(h, "Sistema", rx, 400, rw, 128);
+    check(h, "Iniciar com o Windows", rx + 12, 418, 285, ID_AUTOSTART);
+    push(h, "Atualizar agora", rx + 12, 444, 140, ID_REFRESH);
+    push(h, "Abrir config.toml", rx + 160, 444, 140, ID_OPEN_CONFIG);
+    push(h, "Recarregar do arquivo", rx + 12, 474, 140, ID_RELOAD);
+    label(h, "Chats no painel: últimos", rx + 12, 500, 150);
     let wl: Vec<String> = CHAT_WINDOWS.iter().map(|m| crate::view::fmt_window(*m)).collect();
-    combo(h, rx + 170, 422, 120, ID_CHATWIN, &wl.iter().map(String::as_str).collect::<Vec<_>>());
+    combo(h, rx + 170, 500, 120, ID_CHATWIN, &wl.iter().map(String::as_str).collect::<Vec<_>>());
 
-    push(h, "Fechar", rx + rw - 100, 646, 100, ID_CLOSE);
+    push(h, "Fechar", rx + rw - 100, 538, 100, ID_CLOSE);
 
     apply_theme(h);
     sync(h);
@@ -178,6 +180,7 @@ unsafe fn sync(h: HWND) {
     ] { set_check(h, id, on); }
     set_sel(h, ID_DISPLAY, match u.display { DisplayMode::Number => 0, DisplayMode::Bar => 1, DisplayMode::Both => 2 });
     set_sel(h, ID_BARSTYLE, match u.bar_style { BarStyle::Horizontal => 0, BarStyle::Vertical => 1, BarStyle::Ring => 2, BarStyle::Blocks => 3 });
+    set_sel(h, ID_ACTSTYLE, if u.activity_style == ActivityStyle::SmallDot { 1 } else { 0 });
     set_sel(h, ID_LABELS, match u.labels { LabelStyle::Icon => 0, LabelStyle::Text => 1, LabelStyle::None => 2 });
     set_sel(h, ID_ANCHOR, match u.anchor { Anchor::BesideTray => 0, Anchor::TaskbarStart => 1, Anchor::TaskbarCenter => 2, Anchor::Custom => 3 });
     set_sel(h, ID_MONITOR, u.monitor as usize);

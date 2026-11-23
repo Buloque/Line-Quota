@@ -11,7 +11,7 @@
 ![Licença](https://img.shields.io/badge/licen%C3%A7a-MIT-3FB950)
 ![Tamanho](https://img.shields.io/badge/execut%C3%A1vel-2%2C9%20MB-8957E5)
 ![Memória](https://img.shields.io/badge/mem%C3%B3ria-~21%20MB-F2CC60)
-![Testes](https://img.shields.io/badge/testes-94%20passando-3FB950)
+![Testes](https://img.shields.io/badge/testes-95%20passando-3FB950)
 
 <img src="docs/images/widget-styles.png" alt="Os quatro formatos de gráfico do widget: barra horizontal, vertical, círculo e blocos" width="720">
 
@@ -30,7 +30,7 @@ abrir, sem Electron: é um executável nativo de **2,9 MB**.
 | | |
 |---|---|
 | 📊 **Limites reais** | Janelas de 5 horas e semanal do Claude Code e do Codex/OpenCode (ChatGPT). No Codex gratuito mostra o limite **mensal**. |
-| 🟢 **O que cada agente faz** | Ponto verde quando trabalha, `?` quando espera você. Clique para abrir a árvore *Projeto → Chat → pedido atual*. |
+| 🟢 **O que cada agente faz** | Ponto verde quando trabalha, `?` quando espera você (ou, à escolha, uma linha colorida ao redor do ícone). Clique para abrir a árvore *Projeto → Chat → pedido atual*. |
 | 🔔 **Avisos úteis** | Notificações do Windows ao passar de 80/90/95%, quando o limite renova, quando uma tarefa termina ou precisa de você. |
 | 🎨 **Do seu jeito** | Barra horizontal, vertical, círculo ou blocos; com ou sem número; com ou sem rótulos; ícone, texto ou nada; fundo transparente; qualquer fonte. |
 | 🪄 **Modo automático** | Mostra só o que está aberto e some quando nada está rodando. |
@@ -74,7 +74,7 @@ Para scripts: `LineQuota-Setup.exe` abre a janela; o programa instalado aceita
 | Executável do app | **2,9 MB** (instalador: 3,2 MB, com o app dentro) |
 | Memória em uso | **~21 MB** (set de trabalho), 7 MB privados |
 | CPU parado | **~1%** de um núcleo (leitura local a cada 2 s; rede em outra thread) |
-| Código | **~6 mil linhas** de Rust em 6 crates, **94 testes** automatizados |
+| Código | **~6 mil linhas** de Rust em 6 crates, **95 testes** automatizados |
 | Dependências nativas | Win32 puro (GDI, sem frameworks de interface) |
 | Chamadas de rede | Só `api.anthropic.com` (uso do Claude) e `chatgpt.com` (uso do Codex); sem telemetria |
 

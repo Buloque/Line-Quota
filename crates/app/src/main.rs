@@ -120,10 +120,14 @@ mod demo {
         }
     }
 
-    pub fn rows(now: i64) -> Vec<ProviderRow> {
+    /// `free`: planos gratuitos (Codex só com o limite mensal; OpenCode sem limites, só o ícone).
+    pub fn rows(now: i64, free: bool) -> Vec<ProviderRow> {
         let claude = Usage { provider: ProviderId::Claude, meters: vec![
             meter(MeterKind::FiveHour, 63.0, 5400, now), meter(MeterKind::Weekly, 41.0, 4 * 86400, now)] };
-        let codex = Usage { provider: ProviderId::Codex, meters: vec![meter(MeterKind::Monthly, 28.0, 20 * 86400, now)] };
+        // Codex com todas as janelas (5 h, semanal e mensal), para mostrar cada formato.
+        let codex = Usage { provider: ProviderId::Codex, meters: if free { vec![meter(MeterKind::Monthly, 28.0, 20 * 86400, now)] } else { vec![
+            meter(MeterKind::FiveHour, 34.0, 2 * 3600, now), meter(MeterKind::Weekly, 18.0, 3 * 86400, now),
+            meter(MeterKind::Monthly, 28.0, 20 * 86400, now)] } };
         vec![
             ProviderRow {
                 id: ProviderId::Claude, result: Ok(claude), activity: AgentState::Working, running: true, detail: None,
@@ -137,7 +141,7 @@ mod demo {
             // OpenCode com login do ChatGPT: consome os mesmos limites de 5 h e semanal.
             ProviderRow { id: ProviderId::OpenCode, activity: AgentState::Idle, running: true, detail: None, chats: vec![],
                 result: Ok(Usage { provider: ProviderId::OpenCode, meters: vec![
-                    meter(MeterKind::FiveHour, 22.0, 3 * 3600, now), meter(MeterKind::Weekly, 9.0, 5 * 86400, now)] }) },
+                    meter(MeterKind::FiveHour, 22.0, 3 * 3600, now), meter(MeterKind::Weekly, 9.0, 5 * 86400, now)].into_iter().filter(|_| !free).collect() }) },
         ]
     }
 }
@@ -151,7 +155,7 @@ fn main() {
         let path = std::env::temp_dir().join("LineQuotaDemo").join("config.toml");
         let cfg = std::fs::read_to_string(&path).ok().and_then(|s| Config::from_toml(&s).ok()).unwrap_or_default();
         let shared = Shared::new(cfg, path, std::sync::Arc::new(ClaudeAccount));
-        *shared.rows.lock().unwrap() = demo::rows(now_secs());
+        *shared.rows.lock().unwrap() = demo::rows(now_secs(), args.iter().any(|a| a == "--free"));
         let (tx, _rx) = mpsc::channel::<()>();
         let _ = win::run(shared, tx);
         return;

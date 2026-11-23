@@ -4,7 +4,7 @@
 //! suaves e o resto é transparente, sem franjas de cor.
 use crate::layout::{offset_of, place_on_bar, place_tile, Rect};
 use crate::view::{flyout_tree, segments, should_hide, tooltip, visible_ids, FlyKind, Level, ProviderRow, Seg};
-use lq_core::config::{Anchor, BarStyle, Config, DisplayMode, LabelStyle};
+use lq_core::config::{ActivityStyle, Anchor, BarStyle, Config, DisplayMode, LabelStyle};
 use lq_core::model::ProviderId;
 use lq_core::notify::{Notification, Severity};
 use std::collections::VecDeque;
@@ -66,6 +66,7 @@ const ID_FONT: usize = 200; // +i da lista FONTS
 const FONTS: [&str; 7] = ["Segoe UI Variable Text", "Segoe UI", "Bahnschrift", "Cascadia Mono", "Consolas", "Calibri", "Trebuchet MS"];
 const ID_CHATWIN: usize = 210; // +i de CHAT_WINDOWS
 const ID_BARSTYLE: usize = 220; // +0 horizontal, +1 vertical, +2 anel, +3 blocos
+const ID_ACTSTYLE: usize = 230; // +0 ponto, +1 ponto pequeno
 const CHAT_WINDOWS: [u32; 6] = [10, 30, 60, 120, 360, 1440];
 const ID_AUTOSTART: usize = 58;
 const ID_SETTINGS: usize = 94;
@@ -501,6 +502,20 @@ unsafe fn run_items(hdc: HDC, segs: &[Seg], origin_x: i32, height: i32, draw: bo
                 if draw { draw_icon(hdc, *id, x, height / 2, icon_px(), light); }
                 x += icon_px();
             }
+            Seg::Dot(l, small) => {
+                // Círculo cheio, um pouco menor que o "●" da fonte, com um respiro à direita.
+                let d = (FONT_PX.load(Ordering::Relaxed) * if *small { 38 } else { 60 } / 100).max(if *small { 4 } else { 6 });
+                if draw {
+                    let (b, p) = (CreateSolidBrush(color(*l, light)), CreatePen(PS_SOLID, 1, color(*l, light)));
+                    let (ob, op) = (SelectObject(hdc, b), SelectObject(hdc, p));
+                    let _ = Ellipse(hdc, x, height / 2 - d / 2, x + d, height / 2 - d / 2 + d);
+                    SelectObject(hdc, ob);
+                    SelectObject(hdc, op);
+                    let _ = DeleteObject(b);
+                    let _ = DeleteObject(p);
+                }
+                x += d + scale(5);
+            }
             Seg::Bar(f, l, style) => {
                 let (gw, _) = gauge_size(*style);
                 if draw { draw_gauge(hdc, x, height, f.clamp(0.0, 1.0), bar_color(*l, light), *style, light); }
@@ -596,7 +611,8 @@ unsafe fn relayout(hwnd: HWND) {
     let _ = DeleteObject(font);
     ReleaseDC(hwnd, hdc);
 
-    let (w, h) = (content_w + 2 * scale(8), text_h.max(icon_px()) + scale(6));
+    let icon_h = icon_px();
+    let (w, h) = (content_w + 2 * scale(8), text_h.max(icon_h) + scale(6));
     let r = if cfg.ui.anchor == Anchor::Custom {
         place_on_bar(t.bar, t.tray, w, h, cfg.ui.bar_offset, scale(4), t.fallback_gap)
     } else {
@@ -903,6 +919,8 @@ unsafe fn apply_command(hwnd: HWND, id: usize) -> bool {
             ID_SHOW_WEEK => { let v = !c.claude.show_weekly; for p in c.providers_mut() { p.show_weekly = v; } }
             ID_LOCK => c.ui.locked = !c.ui.locked,
             ID_TAGS => c.ui.show_tags = !c.ui.show_tags,
+            ID_ACTSTYLE => c.ui.activity_style = ActivityStyle::Dot,
+            x if x == ID_ACTSTYLE + 1 => c.ui.activity_style = ActivityStyle::SmallDot,
             x if (ID_BARSTYLE..ID_BARSTYLE + 4).contains(&x) => c.ui.bar_style = [BarStyle::Horizontal, BarStyle::Vertical, BarStyle::Ring, BarStyle::Blocks][x - ID_BARSTYLE],
             ID_SHOW_ACTIVITY => { let v = !c.claude.show_activity; for p in c.providers_mut() { p.show_activity = v; } }
             ID_SHOW_REMAINING => c.ui.show_remaining = !c.ui.show_remaining,

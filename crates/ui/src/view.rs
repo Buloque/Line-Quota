@@ -1,5 +1,5 @@
 //! Converte o estado dos provedores em itens desenháveis (puro, testável sem Win32).
-use lq_core::config::{BarStyle, Config, DisplayMode, LabelStyle};
+use lq_core::config::{ActivityStyle, BarStyle, Config, DisplayMode, LabelStyle};
 use lq_core::model::{AgentDetail, AgentState, ChatInfo, MeterKind, ProviderId, Usage};
 use std::collections::HashSet;
 
@@ -11,6 +11,8 @@ pub enum Seg {
     Text(String, Level),
     /// Ícone do provedor.
     Icon(ProviderId),
+    /// Ponto redondo de "trabalhando" (desenhado, para ficar redondo em qualquer resolução).
+    Dot(Level, bool),
     /// Gráfico de progresso: preenchimento de 0.0 a 1.0, cor e formato.
     Bar(f32, Level, BarStyle),
 }
@@ -62,7 +64,7 @@ pub fn segments(rows: &[ProviderRow], cfg: &Config) -> Vec<Seg> {
         }
         if cfg.ui.labels != LabelStyle::None { out.push(text(" ", Level::Dim)); }
         match row.activity {
-            AgentState::Working if pc.show_activity => out.push(text("● ", Level::Active)),
+            AgentState::Working if pc.show_activity => out.push(Seg::Dot(Level::Active, cfg.ui.activity_style == ActivityStyle::SmallDot)),
             AgentState::NeedsInput if pc.show_activity => out.push(text("? ", Level::Attention)),
             _ => {}
         }
@@ -291,6 +293,7 @@ mod tests {
         s.iter().map(|x| match x {
             Seg::Text(t, _) => t.clone(),
             Seg::Icon(id) => format!("<{}>", label(*id)),
+            Seg::Dot(..) => "● ".to_string(),
             Seg::Bar(f, _, _) => format!("[{:.0}]", f * 100.0),
         }).collect()
     }
@@ -339,6 +342,22 @@ mod tests {
     fn no_identification_shows_only_the_limits() {
         let s = segments(&[row(42.0, 10.0)], &cfg(DisplayMode::Number, LabelStyle::None));
         assert_eq!(flat(&s), "5h 42%  7d 10%");
+    }
+
+    #[test]
+    fn activity_is_a_dot_normal_or_small_and_a_question_mark() {
+        let mut r = row(42.0, 10.0);
+        r.activity = AgentState::Working;
+        let mut c = cfg(DisplayMode::Number, LabelStyle::Icon);
+        let s = segments(&[r.clone()], &c);
+        assert_eq!(s[0], Seg::Icon(ProviderId::Codex));
+        assert!(s.contains(&Seg::Dot(Level::Active, false)));
+        c.ui.activity_style = ActivityStyle::SmallDot;
+        assert!(segments(&[r.clone()], &c).contains(&Seg::Dot(Level::Active, true)));
+        r.activity = AgentState::NeedsInput;
+        assert!(flat(&segments(&[r.clone()], &c)).contains('?'));
+        r.activity = AgentState::Idle;
+        assert!(!flat(&segments(&[r], &c)).contains('●'));
     }
 
     #[test]

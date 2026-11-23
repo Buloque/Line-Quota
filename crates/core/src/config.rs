@@ -65,6 +65,18 @@ pub enum DisplayMode { Number, Bar, #[default] Both }
 pub enum LabelStyle { #[default] Icon, Text, /// Sem identificação do provedor (só os limites).
     None }
 
+/// Como mostrar que um agente está trabalhando / esperando você.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ActivityStyle {
+    /// Ponto verde ao lado do ícone (ou "?" quando espera você).
+    #[default]
+    #[serde(alias = "ring")] // a antiga "linha no ícone" virou ponto
+    Dot,
+    /// O mesmo ponto, menor.
+    SmallDot,
+}
+
 /// Formato do gráfico de cada limite.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
@@ -88,6 +100,8 @@ pub struct UiConfig {
     pub autostart: bool,
     /// Número, barra de progresso ou ambos.
     pub display: DisplayMode,
+    /// Indicador de atividade: linha ao redor do ícone ou ponto.
+    pub activity_style: ActivityStyle,
     /// Formato do gráfico (barra horizontal, vertical, círculo ou blocos).
     pub bar_style: BarStyle,
     /// Mostra os rótulos de texto dos limites (5h / 7d / 30d). Desligado: só os gráficos.
@@ -117,7 +131,7 @@ pub struct UiConfig {
 impl Default for UiConfig {
     fn default() -> Self {
         Self { compact: true, show_remaining: false, exact_reset_time: false, autostart: true,
-               display: DisplayMode::Both, bar_style: BarStyle::Horizontal, show_tags: true, labels: LabelStyle::Icon, anchor: Anchor::BesideTray,
+               display: DisplayMode::Both, bar_style: BarStyle::Horizontal, activity_style: ActivityStyle::Dot, show_tags: true, labels: LabelStyle::Icon, anchor: Anchor::BesideTray,
                monitor: 0, bar_offset: 0, transparent: true, auto_mode: true, auto_hide_when_none: true,
                locked: true, font: "Calibri".into(), chat_window_mins: 30 }
     }
@@ -220,6 +234,9 @@ mod tests {
         let c = Config::default();
         assert!(c.ui.locked && c.ui.auto_mode && c.ui.auto_hide_when_none && c.ui.show_tags);
         assert_eq!((c.ui.font.as_str(), c.ui.bar_style), ("Calibri", BarStyle::Horizontal));
+        assert_eq!(c.ui.activity_style, ActivityStyle::Dot);
+        assert_eq!(Config::from_toml("[ui]
+activity_style = \"ring\"").unwrap().ui.activity_style, ActivityStyle::Dot);
         // configs antigas (com campos removidos e sem os novos) continuam carregando
         let old = Config::from_toml("[ui]\nanchor = \"custom\"\nopencode_free_icon_only = false\nbar_style = \"ring\"\n[claude]\nshow_monthly = true").unwrap();
         assert!(old.ui.locked && old.ui.show_tags);
