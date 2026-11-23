@@ -4,7 +4,7 @@ members = ["crates/core", "crates/activity", "crates/providers", "crates/ui", "c
 
 [workspace.package]
 edition = "2021"
-version = "0.2.1"
+version = "0.2.2"
 license = "MIT"
 
 [workspace.dependencies]
