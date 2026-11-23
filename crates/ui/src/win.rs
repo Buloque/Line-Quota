@@ -34,6 +34,7 @@ const WM_TOAST: u32 = WM_APP + 3;
 const TIMER_POS: usize = 1;
 mod settings;
 mod cookie_guide;
+mod order_strip;
 
 // Alertas: toggles e presets de limiar.
 const ID_ALERT_ENABLED: usize = 100;
@@ -70,10 +71,10 @@ const ID_AG_GEMINI: usize = 76;
 const ID_AG_CLAUDE_WEEKLY: usize = 77;
 const ID_AG_CLAUDE_5H: usize = 78;
 const ID_AG_COMBINED: usize = 79;
-const ID_ORDER_UP: usize = 80; // sobe o provedor selecionado na lista de ordem
-const ID_ORDER_DOWN: usize = 81;
-/// Posição selecionada na lista "Ordem na barra" das configurações (lida ao aplicar subir/descer).
-static ORDER_SEL: AtomicIsize = AtomicIsize::new(-1);
+const ID_ORDER_STRIP: usize = 80; // faixa de ícones arrastáveis (ordem na barra)
+const ID_ORDER_MOVE: usize = 81; // pedido ao widget: mover o provedor ORDER_FROM para ORDER_TO
+static ORDER_FROM: AtomicIsize = AtomicIsize::new(-1);
+static ORDER_TO: AtomicIsize = AtomicIsize::new(-1);
 const ID_FONT: usize = 200; // +i da lista FONTS
 const FONTS: [&str; 7] = ["Segoe UI Variable Text", "Segoe UI", "Bahnschrift", "Cascadia Mono", "Consolas", "Calibri", "Trebuchet MS"];
 const ID_CHATWIN: usize = 210; // +i de CHAT_WINDOWS
@@ -1092,9 +1093,9 @@ unsafe fn apply_command(hwnd: HWND, id: usize) -> bool {
             x if x == ID_PROVIDER + 2 => c.opencode.enabled = !c.opencode.enabled,
             x if x == ID_PROVIDER + 3 => c.cursor.enabled = !c.cursor.enabled,
         x if x == ID_PROVIDER + 4 => c.antigravity.enabled = !c.antigravity.enabled,
-            ID_ORDER_UP | ID_ORDER_DOWN => {
-                let sel = ORDER_SEL.load(Ordering::Relaxed);
-                if sel < 0 || c.move_provider(sel as usize, if id == ID_ORDER_UP { -1 } else { 1 }).is_none() { return false; }
+            ID_ORDER_MOVE => {
+                let (from, to) = (ORDER_FROM.load(Ordering::Relaxed), ORDER_TO.load(Ordering::Relaxed));
+                if from < 0 || to < 0 || !c.move_provider(from as usize, to as usize) { return false; }
             }
             ID_AG_GEMINI => c.antigravity_view.gemini = !c.antigravity_view.gemini,
             ID_AG_CLAUDE_WEEKLY => c.antigravity_view.claude_weekly = !c.antigravity_view.claude_weekly,
