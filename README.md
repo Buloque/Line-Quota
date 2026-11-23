@@ -62,7 +62,7 @@ abrir, sem Electron: é um executável nativo de **2,9 MB**.
 - **Desinstalar:** *Configurações do Windows → Aplicativos instalados → Line Quota*. O desinstalador pergunta se deve apagar também as configurações (**purge**).
 
 > **Aviso do SmartScreen:** o executável ainda não é assinado digitalmente, então o Windows pode mostrar "O Windows protegeu seu PC".
-> Clique em *Mais informações → Executar assim mesmo*. O código é aberto e o `scriptspackage.ps1` imprime o SHA-256 do instalador para você conferir (`Get-FileHash`).
+> Clique em *Mais informações → Executar assim mesmo*. O código é aberto e o `scripts\package.ps1` imprime o SHA-256 do instalador para você conferir (`Get-FileHash`).
 
 Para scripts: `LineQuota-Setup.exe` abre a janela; o programa instalado aceita
 `line-quota.exe --install --quiet [--no-autostart] [--no-launch]` e `--uninstall [--quiet] [--purge]`.
