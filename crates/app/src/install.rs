@@ -43,12 +43,16 @@ fn upsert(list: &mut Vec<Value>, marker: &str, command: &str) -> bool {
 pub fn apply(settings: &mut Value, exe: &str) -> Vec<String> {
     let mut log = Vec::new();
     if !settings.is_object() { *settings = json!({}); }
-    let hooks = settings.as_object_mut().unwrap().entry("hooks").or_insert_with(|| json!({}));
-    for ev in EVENTS {
-        let arr = hooks.as_object_mut().unwrap().entry(ev).or_insert_with(|| json!([]));
-        if upsert(arr.as_array_mut().unwrap(), MARKER, &format!("{exe} {MARKER}")) {
-            log.push(format!("hook {ev} configurado"));
-        }
+    // Estruturas inesperadas no arquivo do usuário (hooks que não é objeto, evento que não é lista) são
+    // preservadas: avisa e pula, em vez de derrubar o processo ou sobrescrever.
+    match settings.as_object_mut().unwrap().entry("hooks").or_insert_with(|| json!({})).as_object_mut() {
+        None => log.push("AVISO: \"hooks\" no settings.json não é um objeto; hooks não instalados".into()),
+        Some(hooks) => for ev in EVENTS {
+            match hooks.entry(ev).or_insert_with(|| json!([])).as_array_mut() {
+                None => log.push(format!("AVISO: hook {ev} no settings.json não é uma lista; ignorado")),
+                Some(list) => if upsert(list, MARKER, &format!("{exe} {MARKER}")) { log.push(format!("hook {ev} configurado")); },
+            }
+        },
     }
     let sl = &settings["statusLine"];
     if sl.is_null() {
@@ -86,11 +90,23 @@ fn edit_at(p: &std::path::Path, f: impl FnOnce(&mut Value) -> Vec<String>) -> Re
     if !claude_present(p) {
         return Ok(vec!["Claude Code não encontrado: integração com o Claude ignorada (o widget funciona sem ele)".into()]);
     }
-    let txt = std::fs::read_to_string(p).unwrap_or_else(|_| "{}".into());
+    // Só "arquivo inexistente" vira `{}`; qualquer outro erro de leitura aborta sem tocar no arquivo do usuário.
+    let txt = match std::fs::read_to_string(p) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{}".into(),
+        Err(e) => return Err(format!("não consegui ler o settings.json ({e}); nada foi alterado")),
+    };
     let mut v: Value = serde_json::from_str(txt.trim_start_matches('\u{feff}')).map_err(|e| format!("settings.json inválido: {e}"))?;
-    let _ = std::fs::write(p.with_extension("json.lq-bak"), &txt); // backup antes de mexer
+    let before = v.clone();
     let log = f(&mut v);
-    std::fs::write(p, serde_json::to_string_pretty(&v).unwrap()).map_err(|e| e.to_string())?;
+    if v == before { return Ok(log); } // nada mudou: não reescreve (evita corrida com o Claude Code)
+    // Backup do original uma única vez (reinstalar/atualizar não o sobrescreve com o arquivo já modificado).
+    let bak = p.with_extension("json.lq-bak");
+    if p.is_file() && !bak.exists() { let _ = std::fs::write(&bak, &txt); }
+    // Gravação atômica: arquivo temporário na mesma pasta + rename.
+    let tmp = p.with_extension("json.lq-tmp");
+    let out = serde_json::to_string_pretty(&v).unwrap();
+    std::fs::write(&tmp, out).and_then(|_| std::fs::rename(&tmp, p)).map_err(|e| { let _ = std::fs::remove_file(&tmp); e.to_string() })?;
     Ok(log)
 }
 
@@ -179,5 +195,43 @@ mod repoint_tests {
         assert_eq!(s["hooks"]["Stop"].as_array().unwrap().len(), 1);
         assert_eq!(s["hooks"]["Stop"][0]["hooks"][0]["command"], "\"new.exe\" --hook claude");
         assert_eq!(s["statusLine"]["command"], "\"new.exe\" --statusline");
+    }
+}
+
+#[cfg(test)]
+mod hardening_tests {
+    use super::*;
+
+    #[test]
+    fn unexpected_shapes_do_not_panic_or_get_overwritten() {
+        let mut s = json!({"hooks": [1, 2], "x": 1});
+        let log = apply(&mut s, "\"a.exe\"");
+        assert!(log.iter().any(|l| l.contains("AVISO")));
+        assert_eq!(s["hooks"], json!([1, 2])); // preservado
+        let mut s = json!({"hooks": {"Stop": "texto"}});
+        assert!(apply(&mut s, "\"a.exe\"").iter().any(|l| l.contains("Stop")));
+        assert_eq!(s["hooks"]["Stop"], "texto");
+        assert!(s["hooks"]["PostToolUse"].is_array()); // os demais eventos seguem
+    }
+
+    #[test]
+    fn unreadable_settings_abort_without_touching_the_file_and_backup_keeps_the_original() {
+        let d = std::env::temp_dir().join(format!("lq-edit-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join(".claude")).unwrap();
+        let p = d.join(".claude").join("settings.json");
+        std::fs::write(&p, [0xFF, 0xFE, b'{', 0, b'}', 0]).unwrap(); // UTF-16: não é UTF-8
+        assert!(edit_at(&p, |v| apply(v, "\"a.exe\"")).is_err());
+        assert_eq!(std::fs::read(&p).unwrap(), vec![0xFF, 0xFE, b'{', 0, b'}', 0]);
+        // arquivo válido: o backup guarda o original e uma segunda execução não o sobrescreve
+        std::fs::write(&p, r#"{"model":"opus"}"#).unwrap();
+        edit_at(&p, |v| apply(v, "\"a.exe\"")).unwrap();
+        edit_at(&p, |v| apply(v, "\"b.exe\"")).unwrap();
+        assert_eq!(std::fs::read_to_string(p.with_extension("json.lq-bak")).unwrap(), r#"{"model":"opus"}"#);
+        // sem mudança, não regrava
+        let m1 = std::fs::metadata(&p).unwrap().modified().unwrap();
+        edit_at(&p, |v| apply(v, "\"b.exe\"")).unwrap();
+        assert_eq!(std::fs::metadata(&p).unwrap().modified().unwrap(), m1);
+        let _ = std::fs::remove_dir_all(&d);
     }
 }

@@ -9,7 +9,7 @@ const ID_CLOSE: usize = 999;
 const TIMER_SYNC: usize = 3;
 
 /// Comboboxes: o ID do controle é a base do comando; o item escolhido soma ao ID.
-const COMBOS: [usize; 7] = [ID_DISPLAY, ID_LABELS, ID_FONT, ID_ANCHOR, ID_MONITOR, ID_THRESH, ID_CHATWIN];
+const COMBOS: [usize; 8] = [ID_BARSTYLE, ID_DISPLAY, ID_LABELS, ID_FONT, ID_ANCHOR, ID_MONITOR, ID_THRESH, ID_CHATWIN];
 
 unsafe fn mk(parent: HWND, class: PCWSTR, text: &str, style: u32, r: (i32, i32, i32, i32), id: usize) -> HWND {
     let hinst = GetModuleHandleW(None).unwrap_or_default();
@@ -60,7 +60,7 @@ pub(super) unsafe fn open(tile: HWND) {
         CLIP_DEFAULT_PRECIS.0 as u32, CLEARTYPE_QUALITY.0 as u32, 0, w!("Segoe UI"));
     SET_FONT.store(f.0 as isize, Ordering::Relaxed);
 
-    let (cw, ch) = (scale(648), scale(628));
+    let (cw, ch) = (scale(648), scale(684));
     let mut rc = RECT { left: 0, top: 0, right: cw, bottom: ch };
     let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
     let _ = AdjustWindowRectEx(&mut rc, style, false, WINDOW_EX_STYLE(0));
@@ -72,74 +72,75 @@ pub(super) unsafe fn open(tile: HWND) {
 
     // Coluna esquerda: aparência, posição, alertas.
     let (lx, lw) = (12, 300);
-    group(h, "Aparência", lx, 8, lw, 260);
+    group(h, "Aparência", lx, 8, lw, 290);
     label(h, "Exibição", lx + 12, 28, 90);
-    combo(h, lx + 110, 28, 176, ID_DISPLAY, &["Número", "Barra de progresso", "Barra + número"]);
-    label(h, "Identificação", lx + 12, 58, 90);
-    combo(h, lx + 110, 58, 176, ID_LABELS, &["Ícone", "Texto (Cl / Cx)"]);
-    label(h, "Fonte", lx + 12, 88, 90);
-    let fc = combo(h, lx + 110, 88, 176, ID_FONT, &[]);
+    combo(h, lx + 110, 28, 176, ID_DISPLAY, &["Número", "Gráfico", "Gráfico + número"]);
+    label(h, "Gráfico", lx + 12, 58, 90);
+    combo(h, lx + 110, 58, 176, ID_BARSTYLE, &["Barra horizontal", "Barra vertical", "Círculo", "Blocos"]);
+    label(h, "Identificação", lx + 12, 88, 90);
+    combo(h, lx + 110, 88, 176, ID_LABELS, &["Ícone", "Texto (Cl / Cx)", "Nenhuma"]);
+    label(h, "Fonte", lx + 12, 118, 90);
+    let fc = combo(h, lx + 110, 118, 176, ID_FONT, &[]);
     for (i, n) in FONTS.iter().enumerate().filter(|(_, n)| font_installed(n)) {
         let idx = SendMessageW(fc, CB_ADDSTRING, WPARAM(0), LPARAM(wide0(n).as_ptr() as isize)).0;
         SendMessageW(fc, CB_SETITEMDATA, WPARAM(idx as usize), LPARAM(i as isize));
     }
-    check(h, "Fundo transparente", lx + 12, 120, 270, ID_TRANSPARENT);
-    check(h, "Mostrar o que resta (em vez do usado)", lx + 12, 144, 270, ID_SHOW_REMAINING);
-    check(h, "Limite de 5 horas", lx + 12, 168, 270, ID_SHOW_5H);
-    check(h, "Limite semanal", lx + 12, 192, 270, ID_SHOW_WEEK);
-    check(h, "Limite mensal (Codex gratuito)", lx + 12, 216, 270, ID_SHOW_MONTH);
-    check(h, "Tarefa ativa / aguardando resposta", lx + 12, 240, 270, ID_SHOW_ACTIVITY);
+    check(h, "Fundo transparente", lx + 12, 150, 270, ID_TRANSPARENT);
+    check(h, "Mostrar rótulos (5h / 7d / 30d)", lx + 12, 174, 270, ID_TAGS);
+    check(h, "Mostrar o que resta (em vez do usado)", lx + 12, 198, 270, ID_SHOW_REMAINING);
+    check(h, "Limite de 5 horas", lx + 12, 222, 270, ID_SHOW_5H);
+    check(h, "Limite semanal", lx + 12, 246, 270, ID_SHOW_WEEK);
+    check(h, "Tarefa ativa / aguardando resposta", lx + 12, 270, 270, ID_SHOW_ACTIVITY);
 
-    group(h, "Posição", lx, 276, lw, 92);
-    label(h, "Na barra", lx + 12, 296, 90);
-    combo(h, lx + 110, 296, 176, ID_ANCHOR, &["Ao lado da bandeja", "Início da barra", "Centro da barra", "Livre (arrastado)"]);
-    label(h, "Monitor", lx + 12, 326, 90);
-    let mc = combo(h, lx + 110, 326, 176, ID_MONITOR, &["Automático"]);
+    group(h, "Posição", lx, 306, lw, 122);
+    label(h, "Na barra", lx + 12, 326, 90);
+    combo(h, lx + 110, 326, 176, ID_ANCHOR, &["Ao lado da bandeja", "Início da barra", "Centro da barra", "Livre (arrastar)"]);
+    label(h, "Monitor", lx + 12, 356, 90);
+    let mc = combo(h, lx + 110, 356, 176, ID_MONITOR, &["Automático"]);
     for (i, m) in monitors().iter().enumerate() {
         let n = format!("Monitor {}{}", i + 1, if m.primary { " (principal)" } else { "" });
         SendMessageW(mc, CB_ADDSTRING, WPARAM(0), LPARAM(wide0(&n).as_ptr() as isize));
     }
+    check(h, "Travar a posição na barra", lx + 12, 392, 270, ID_LOCK);
 
-    group(h, "Alertas", lx, 376, lw, 238);
-    check(h, "Alertas ativados", lx + 12, 396, 270, ID_ALERT_ENABLED);
-    check(h, "Mostrar notificações do Windows", lx + 12, 420, 270, ID_ALERT_TOAST);
-    check(h, "Tocar som", lx + 12, 444, 270, ID_ALERT_SOUND);
-    check(h, "Avisar quando o limite renovar", lx + 12, 468, 270, ID_ALERT_RESET);
-    check(h, "Avisar quando a tarefa terminar", lx + 12, 492, 270, ID_ALERT_DONE);
-    check(h, "Avisar quando precisar de resposta", lx + 12, 516, 270, ID_ALERT_INPUT);
-    label(h, "Avisar acima de", lx + 12, 546, 100);
+    group(h, "Alertas", lx, 436, lw, 238);
+    check(h, "Alertas ativados", lx + 12, 456, 270, ID_ALERT_ENABLED);
+    check(h, "Mostrar notificações do Windows", lx + 12, 480, 270, ID_ALERT_TOAST);
+    check(h, "Tocar som", lx + 12, 504, 270, ID_ALERT_SOUND);
+    check(h, "Avisar quando o limite renovar", lx + 12, 528, 270, ID_ALERT_RESET);
+    check(h, "Avisar quando a tarefa terminar", lx + 12, 552, 270, ID_ALERT_DONE);
+    check(h, "Avisar quando precisar de resposta", lx + 12, 576, 270, ID_ALERT_INPUT);
+    label(h, "Avisar acima de", lx + 12, 606, 100);
     let labels: Vec<String> = THRESHOLD_PRESETS.iter()
         .map(|p| p.iter().map(|t| format!("{t:.0}%")).collect::<Vec<_>>().join(" / ")).collect();
-    combo(h, lx + 110, 546, 176, ID_THRESH, &labels.iter().map(String::as_str).collect::<Vec<_>>());
-    push(h, "Testar notificação", lx + 12, 578, 150, ID_ALERT_TEST);
+    combo(h, lx + 110, 606, 176, ID_THRESH, &labels.iter().map(String::as_str).collect::<Vec<_>>());
+    push(h, "Testar notificação", lx + 12, 638, 150, ID_ALERT_TEST);
 
     // Coluna direita: provedores, conta, sistema.
     let (rx, rw) = (324, 312);
-    group(h, "Provedores", rx, 8, rw, 212);
+    group(h, "Provedores", rx, 8, rw, 168);
     check(h, "Claude Code", rx + 12, 28, 285, ID_PROVIDER);
     check(h, "Codex", rx + 12, 52, 285, ID_PROVIDER + 1);
     check(h, "OpenCode", rx + 12, 76, 285, ID_PROVIDER + 2);
-    check(h, "OpenCode gratuito: mostrar só o ícone", rx + 28, 100, 270, ID_OC_FREE);
-    check(h, "Modo automático (só o que está aberto)", rx + 12, 134, 285, ID_AUTO);
-    check(h, "Ocultar o widget se nada estiver aberto", rx + 28, 158, 270, ID_AUTO_HIDE);
+    check(h, "Modo automático (só o que está aberto)", rx + 12, 110, 285, ID_AUTO);
+    check(h, "Ocultar o widget se nada estiver aberto", rx + 28, 134, 270, ID_AUTO_HIDE);
 
-    group(h, "Conta Claude", rx, 228, rw, 112);
-    mk(h, w!("STATIC"), "", 0, (rx + 12, 250, rw - 24, 18), ID_STATUS);
-    push(h, "Entrar (abre o navegador)", rx + 12, 274, 180, ID_CLAUDE_LOGIN);
-    push(h, "Colar código", rx + 200, 274, 100, ID_CLAUDE_PASTE);
-    push(h, "Sair da conta Claude", rx + 12, 304, 180, ID_CLAUDE_LOGOUT);
+    group(h, "Conta Claude", rx, 184, rw, 112);
+    mk(h, w!("STATIC"), "", 0, (rx + 12, 206, rw - 24, 18), ID_STATUS);
+    push(h, "Entrar (abre o navegador)", rx + 12, 230, 180, ID_CLAUDE_LOGIN);
+    push(h, "Colar código", rx + 200, 230, 100, ID_CLAUDE_PASTE);
+    push(h, "Sair da conta Claude", rx + 12, 260, 180, ID_CLAUDE_LOGOUT);
 
-    group(h, "Sistema", rx, 348, rw, 176);
-    check(h, "Iniciar com o Windows", rx + 12, 368, 285, ID_AUTOSTART);
-    push(h, "Atualizar agora", rx + 12, 398, 140, ID_REFRESH);
-    push(h, "Abrir config.toml", rx + 160, 398, 140, ID_OPEN_CONFIG);
-    push(h, "Recarregar do arquivo", rx + 12, 430, 140, ID_RELOAD);
-    label(h, "Chats no painel: últimos", rx + 12, 466, 150);
+    group(h, "Sistema", rx, 304, rw, 148);
+    check(h, "Iniciar com o Windows", rx + 12, 324, 285, ID_AUTOSTART);
+    push(h, "Atualizar agora", rx + 12, 354, 140, ID_REFRESH);
+    push(h, "Abrir config.toml", rx + 160, 354, 140, ID_OPEN_CONFIG);
+    push(h, "Recarregar do arquivo", rx + 12, 386, 140, ID_RELOAD);
+    label(h, "Chats no painel: últimos", rx + 12, 422, 150);
     let wl: Vec<String> = CHAT_WINDOWS.iter().map(|m| crate::view::fmt_window(*m)).collect();
-    combo(h, rx + 170, 466, 120, ID_CHATWIN, &wl.iter().map(String::as_str).collect::<Vec<_>>());
-    check(h, "Travar a posição na barra", rx + 12, 494, 285, ID_LOCK);
+    combo(h, rx + 170, 422, 120, ID_CHATWIN, &wl.iter().map(String::as_str).collect::<Vec<_>>());
 
-    push(h, "Fechar", rx + rw - 100, 590, 100, ID_CLOSE);
+    push(h, "Fechar", rx + rw - 100, 646, 100, ID_CLOSE);
 
     apply_theme(h);
     sync(h);
@@ -168,15 +169,16 @@ unsafe fn sync(h: HWND) {
     let (u, a) = (&cfg.ui, &cfg.alerts);
     for (id, on) in [
         (ID_TRANSPARENT, u.transparent), (ID_SHOW_REMAINING, u.show_remaining),
-        (ID_SHOW_5H, cfg.claude.show_five_hour), (ID_SHOW_WEEK, cfg.claude.show_weekly), (ID_SHOW_MONTH, cfg.claude.show_monthly), (ID_LOCK, u.locked), (ID_SHOW_ACTIVITY, cfg.claude.show_activity),
+        (ID_SHOW_5H, cfg.claude.show_five_hour), (ID_SHOW_WEEK, cfg.claude.show_weekly), (ID_TAGS, u.show_tags), (ID_LOCK, u.locked), (ID_SHOW_ACTIVITY, cfg.claude.show_activity),
         (ID_ALERT_ENABLED, a.enabled), (ID_ALERT_TOAST, a.toast), (ID_ALERT_SOUND, a.sound),
         (ID_ALERT_RESET, a.notify_reset), (ID_ALERT_DONE, a.notify_task_done), (ID_ALERT_INPUT, a.notify_needs_input),
         (ID_PROVIDER, cfg.claude.enabled), (ID_PROVIDER + 1, cfg.codex.enabled), (ID_PROVIDER + 2, cfg.opencode.enabled),
-        (ID_OC_FREE, u.opencode_free_icon_only), (ID_AUTO, u.auto_mode), (ID_AUTO_HIDE, u.auto_hide_when_none),
+        (ID_AUTO, u.auto_mode), (ID_AUTO_HIDE, u.auto_hide_when_none),
         (ID_AUTOSTART, autostart_enabled()),
     ] { set_check(h, id, on); }
     set_sel(h, ID_DISPLAY, match u.display { DisplayMode::Number => 0, DisplayMode::Bar => 1, DisplayMode::Both => 2 });
-    set_sel(h, ID_LABELS, if u.labels == LabelStyle::Icon { 0 } else { 1 });
+    set_sel(h, ID_BARSTYLE, match u.bar_style { BarStyle::Horizontal => 0, BarStyle::Vertical => 1, BarStyle::Ring => 2, BarStyle::Blocks => 3 });
+    set_sel(h, ID_LABELS, match u.labels { LabelStyle::Icon => 0, LabelStyle::Text => 1, LabelStyle::None => 2 });
     set_sel(h, ID_ANCHOR, match u.anchor { Anchor::BesideTray => 0, Anchor::TaskbarStart => 1, Anchor::TaskbarCenter => 2, Anchor::Custom => 3 });
     set_sel(h, ID_MONITOR, u.monitor as usize);
     set_sel(h, ID_THRESH, THRESHOLD_PRESETS.iter().position(|p| a.thresholds == *p).unwrap_or(usize::MAX));
@@ -205,7 +207,6 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
                 let sel = sel as usize;
                 match id {
                     ID_FONT => SendMessageW(HWND(lp.0 as *mut _), CB_GETITEMDATA, WPARAM(sel), LPARAM(0)).0 as usize + ID_FONT,
-                    ID_ANCHOR if sel == 3 => return LRESULT(0), // "Livre" só se ativa arrastando o widget
                     _ => id + sel,
                 }
             } else {

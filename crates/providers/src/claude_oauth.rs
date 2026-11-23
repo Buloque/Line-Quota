@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 const URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const TTL_OK: Duration = Duration::from_secs(180);
 const TTL_ERR: Duration = Duration::from_secs(60);
+const TTL_RATE_LIMITED: Duration = Duration::from_secs(5 * 60);
 
 pub const NO_LOGIN: &str = "Claude: clique com o botão direito > Conta Claude > Entrar";
 
@@ -98,7 +99,8 @@ impl OAuth {
         let gen = crate::claude_auth::generation(); // muda em login/logout: invalida o cache
         let mut c = self.cache.lock().unwrap();
         if let Some((at, g, r)) = c.as_ref() {
-            let ttl = if r.is_ok() { TTL_OK } else { TTL_ERR };
+            // 429 = limite de requisições: espera bem mais antes de tentar de novo.
+            let ttl = match r { Ok(_) => TTL_OK, Err(e) if e.contains("429") => TTL_RATE_LIMITED, Err(_) => TTL_ERR };
             if *g == gen && at.elapsed() < ttl { return r.clone(); }
         }
         let r = fetch_now(now_ms);

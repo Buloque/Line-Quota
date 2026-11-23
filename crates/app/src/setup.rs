@@ -11,15 +11,26 @@ const EXE_NAME: &str = "line-quota.exe";
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const DETACHED: u32 = 0x0000_0008;
 
+
+/// Variável de ambiente que aponta para uma pasta absoluta (vazia/relativa = não confiável: nada é apagado com ela).
+fn env_dir(name: &str) -> Option<PathBuf> {
+    let p = PathBuf::from(std::env::var(name).ok()?);
+    (p.is_absolute() && p.parent().is_some()).then_some(p)
+}
+
+/// Programas do sistema por caminho absoluto (não pela busca no PATH/pasta atual, que inclui a pasta do app).
+fn system_exe(name: &str) -> PathBuf {
+    env_dir("SystemRoot").unwrap_or_else(|| PathBuf::from(r"C:\Windows")).join("System32").join(name)
+}
 /// Pasta de instalação (por usuário).
 pub fn install_dir() -> PathBuf {
-    PathBuf::from(std::env::var("LOCALAPPDATA").unwrap_or_default()).join("Programs").join("LineQuota")
+    env_dir("LOCALAPPDATA").unwrap_or_else(|| PathBuf::from(r"C:\LineQuota-sem-LOCALAPPDATA")).join("Programs").join("LineQuota")
 }
 
 /// Encerra outras instâncias do app (menos esta), para poder trocar/remover o arquivo.
 fn stop_others() {
     let me = std::process::id().to_string();
-    let _ = Command::new("taskkill")
+    let _ = Command::new(system_exe("taskkill.exe"))
         .args(["/F", "/IM", EXE_NAME, "/FI", &format!("PID ne {me}")])
         .creation_flags(CREATE_NO_WINDOW).output();
 }
@@ -91,24 +102,32 @@ pub fn install_wizard() {
 
 /// Remove tudo o que o instalador criou. `purge` apaga também as configurações.
 pub fn uninstall_app(quiet: bool, purge: bool) {
+    // Sem pastas de usuário válidas não há o que remover com segurança (variável vazia/relativa apagaria o lugar errado).
+    let (Some(local_base), Some(roaming)) = (env_dir("LOCALAPPDATA"), env_dir("APPDATA")) else {
+        report(quiet, "Line Quota — erro na remoção", "Não encontrei as pastas do usuário (LOCALAPPDATA/APPDATA); nada foi removido.");
+        return;
+    };
     let dir = install_dir();
     stop_others();
     let _ = install::uninstall();
     win::unregister_toast_identity();
     win::set_autostart_for(&dir.join(EXE_NAME), false);
     win::unregister_uninstall();
-    let local = PathBuf::from(std::env::var("LOCALAPPDATA").unwrap_or_default()).join("LineQuota");
+    let local = local_base.join("LineQuota");
     let _ = std::fs::remove_dir_all(local.join("activity"));
-    let cfg = PathBuf::from(std::env::var("APPDATA").unwrap_or_default()).join("LineQuota");
+    let cfg = roaming.join("LineQuota");
     if purge {
         let _ = std::fs::remove_dir_all(&local);
         let _ = std::fs::remove_dir_all(&cfg);
     }
     // O próprio .exe está em uso: um cmd separado apaga a pasta logo depois que este processo sair.
+    // O cmd expande % ^ & e aspas: caminhos com esses caracteres não passam pelo cmd (a pasta fica; sem risco).
     let d = dir.to_string_lossy().to_string();
-    let _ = Command::new("cmd")
-        .raw_arg(format!("/C ping -n 3 127.0.0.1 >nul & rmdir /S /Q \"{d}\""))
-        .creation_flags(DETACHED | CREATE_NO_WINDOW).spawn();
+    if !d.contains(['%', '^', '&', '"', '!', '|', '<', '>']) {
+        let _ = Command::new(system_exe("cmd.exe"))
+            .raw_arg(format!("/C ping -n 3 127.0.0.1 >nul & rmdir /S /Q \"{d}\""))
+            .creation_flags(DETACHED | CREATE_NO_WINDOW).spawn();
+    }
     report(quiet, "Line Quota",
         &format!("Line Quota removido.{}", if purge { String::new() } else { format!("\n\nSuas configurações foram mantidas em {}.", cfg.display()) }));
 }

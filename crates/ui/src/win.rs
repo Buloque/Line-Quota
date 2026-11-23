@@ -4,7 +4,7 @@
 //! suaves e o resto é transparente, sem franjas de cor.
 use crate::layout::{offset_of, place_on_bar, place_tile, Rect};
 use crate::view::{flyout_tree, segments, should_hide, tooltip, visible_ids, FlyKind, Level, ProviderRow, Seg};
-use lq_core::config::{Anchor, Config, DisplayMode, LabelStyle};
+use lq_core::config::{Anchor, BarStyle, Config, DisplayMode, LabelStyle};
 use lq_core::model::ProviderId;
 use lq_core::notify::{Notification, Severity};
 use std::collections::VecDeque;
@@ -47,13 +47,13 @@ const THRESHOLD_PRESETS: [&[f32]; 3] = [&[80.0, 90.0, 95.0], &[90.0, 95.0], &[95
 
 // IDs de comando do menu.
 const ID_DISPLAY: usize = 10; // +0 número, +1 barra, +2 ambos
-const ID_LABELS: usize = 20; // +0 ícone, +1 texto
+const ID_LABELS: usize = 20; // +0 ícone, +1 texto, +2 nenhum
 const ID_SHOW_5H: usize = 30;
 const ID_SHOW_WEEK: usize = 31;
 const ID_SHOW_ACTIVITY: usize = 32;
 const ID_SHOW_REMAINING: usize = 33;
 const ID_TRANSPARENT: usize = 34;
-const ID_SHOW_MONTH: usize = 35;
+const ID_TAGS: usize = 35; // rótulos 5h / 7d / 30d
 const ID_PROVIDER: usize = 40; // +0 claude, +1 codex, +2 opencode
 const ID_ANCHOR: usize = 50; // +0 bandeja, +1 início, +2 centro
 const ID_AUTO: usize = 55;
@@ -65,8 +65,8 @@ const ID_CLAUDE_LOGOUT: usize = 72;
 const ID_FONT: usize = 200; // +i da lista FONTS
 const FONTS: [&str; 7] = ["Segoe UI Variable Text", "Segoe UI", "Bahnschrift", "Cascadia Mono", "Consolas", "Calibri", "Trebuchet MS"];
 const ID_CHATWIN: usize = 210; // +i de CHAT_WINDOWS
+const ID_BARSTYLE: usize = 220; // +0 horizontal, +1 vertical, +2 anel, +3 blocos
 const CHAT_WINDOWS: [u32; 6] = [10, 30, 60, 120, 360, 1440];
-const ID_OC_FREE: usize = 57;
 const ID_AUTOSTART: usize = 58;
 const ID_SETTINGS: usize = 94;
 const ID_LOCK: usize = 95;
@@ -414,6 +414,71 @@ unsafe fn draw_icon(hdc: HDC, id: ProviderId, x: i32, cy: i32, s: i32, light: bo
     }
 }
 
+/// Tamanho (largura, altura) do gráfico de cada formato.
+fn gauge_size(style: BarStyle) -> (i32, i32) {
+    match style {
+        BarStyle::Horizontal => (bar_w(), bar_h()),
+        BarStyle::Vertical => ((bar_h() + scale(2)).max(6), icon_px()),
+        BarStyle::Ring => (icon_px(), icon_px()),
+        BarStyle::Blocks => (5 * scale(6) + 4 * scale(2), bar_h() + scale(2)),
+    }
+}
+
+/// Desenha um gráfico de progresso (`f` de 0.0 a 1.0) centralizado na altura `height`.
+unsafe fn draw_gauge(hdc: HDC, x: i32, height: i32, f: f32, color: COLORREF, style: BarStyle, light: bool) {
+    let track = COLORREF(if light { 0x00C8C8C8 } else { 0x00484848 });
+    let (w, h) = gauge_size(style);
+    let top = (height - h) / 2;
+    match style {
+        BarStyle::Horizontal => {
+            fill(hdc, &RECT { left: x, top, right: x + w, bottom: top + h }, track);
+            let fw = if f > 0.0 { ((w as f32 * f).round() as i32).max(2) } else { 0 };
+            if fw > 0 { fill(hdc, &RECT { left: x, top, right: x + fw, bottom: top + h }, color); }
+        }
+        BarStyle::Vertical => {
+            fill(hdc, &RECT { left: x, top, right: x + w, bottom: top + h }, track);
+            let fh = if f > 0.0 { ((h as f32 * f).round() as i32).max(2) } else { 0 };
+            if fh > 0 { fill(hdc, &RECT { left: x, top: top + h - fh, right: x + w, bottom: top + h }, color); }
+        }
+        BarStyle::Blocks => {
+            let (bw, gap) = (scale(6), scale(2));
+            let lit = if f > 0.0 { ((f * 5.0).round() as i32).max(1) } else { 0 };
+            for i in 0..5 {
+                let l = x + i * (bw + gap);
+                fill(hdc, &RECT { left: l, top, right: l + bw, bottom: top + h }, if i < lit { color } else { track });
+            }
+        }
+        BarStyle::Ring => {
+            let t = (w / 5).max(2);
+            let (l, tp, r, b) = (x + t / 2, top + t / 2, x + w - t / 2, top + h - t / 2);
+            let null_brush = GetStockObject(NULL_BRUSH);
+            let old_brush = SelectObject(hdc, null_brush);
+            let ring = |c: COLORREF, draw: &dyn Fn()| {
+                let pen = CreatePen(PS_SOLID, t, c);
+                let old = SelectObject(hdc, pen);
+                draw();
+                SelectObject(hdc, old);
+                let _ = DeleteObject(pen);
+            };
+            ring(track, &|| { let _ = Ellipse(hdc, l, tp, r, b); });
+            if f >= 0.995 {
+                ring(color, &|| { let _ = Ellipse(hdc, l, tp, r, b); });
+            } else if f > 0.0 {
+                // Começa no topo e avança no sentido horário.
+                let (cx, cy) = ((l + r) as f32 / 2.0, (tp + b) as f32 / 2.0);
+                let (rx, ry) = ((r - l) as f32 / 2.0, (b - tp) as f32 / 2.0);
+                let a = f * std::f32::consts::TAU;
+                let end = ((cx + rx * a.sin()) as i32, (cy - ry * a.cos()) as i32);
+                ring(color, &|| {
+                    SetArcDirection(hdc, AD_CLOCKWISE);
+                    let _ = Arc(hdc, l, tp, r, b, cx as i32, tp, end.0, end.1);
+                });
+            }
+            SelectObject(hdc, old_brush);
+        }
+    }
+}
+
 /// Mede (ou desenha, se `draw`) os itens. Retorna (largura total, altura do texto).
 unsafe fn run_items(hdc: HDC, segs: &[Seg], origin_x: i32, height: i32, draw: bool, light: bool) -> (i32, i32) {
     let mut ext = SIZE::default();
@@ -436,16 +501,10 @@ unsafe fn run_items(hdc: HDC, segs: &[Seg], origin_x: i32, height: i32, draw: bo
                 if draw { draw_icon(hdc, *id, x, height / 2, icon_px(), light); }
                 x += icon_px();
             }
-            Seg::Bar(f, l) => {
-                if draw {
-                    let (bw, bh) = (bar_w(), bar_h());
-                    let top = (height - bh) / 2;
-                    let track = if light { 0x00C8C8C8 } else { 0x00484848 };
-                    fill(hdc, &RECT { left: x, top, right: x + bw, bottom: top + bh }, COLORREF(track));
-                    let fw = if *f > 0.0 { ((bw as f32 * f.clamp(0.0, 1.0)).round() as i32).max(2) } else { 0 };
-                    if fw > 0 { fill(hdc, &RECT { left: x, top, right: x + fw, bottom: top + bh }, bar_color(*l, light)); }
-                }
-                x += bar_w();
+            Seg::Bar(f, l, style) => {
+                let (gw, _) = gauge_size(*style);
+                if draw { draw_gauge(hdc, x, height, f.clamp(0.0, 1.0), bar_color(*l, light), *style, light); }
+                x += gw;
             }
         }
     }
@@ -826,6 +885,10 @@ unsafe fn apply_command(hwnd: HWND, id: usize) -> bool {
         }
         _ => {}
     }
+    let free_offset = if id == ID_ANCHOR + 3 {
+        let cfg = sh.config.lock().unwrap().clone();
+        rect_of(hwnd).map(|r| offset_of(resolve_target(&cfg, hwnd).bar, r))
+    } else { None };
     {
         let mut c = sh.config.lock().unwrap();
         match id {
@@ -835,10 +898,12 @@ unsafe fn apply_command(hwnd: HWND, id: usize) -> bool {
             ID_TRANSPARENT => c.ui.transparent = !c.ui.transparent,
             ID_LABELS => c.ui.labels = LabelStyle::Icon,
             x if x == ID_LABELS + 1 => c.ui.labels = LabelStyle::Text,
+            x if x == ID_LABELS + 2 => c.ui.labels = LabelStyle::None,
             ID_SHOW_5H => { let v = !c.claude.show_five_hour; for p in c.providers_mut() { p.show_five_hour = v; } }
             ID_SHOW_WEEK => { let v = !c.claude.show_weekly; for p in c.providers_mut() { p.show_weekly = v; } }
-            ID_SHOW_MONTH => { let v = !c.claude.show_monthly; for p in c.providers_mut() { p.show_monthly = v; } }
             ID_LOCK => c.ui.locked = !c.ui.locked,
+            ID_TAGS => c.ui.show_tags = !c.ui.show_tags,
+            x if (ID_BARSTYLE..ID_BARSTYLE + 4).contains(&x) => c.ui.bar_style = [BarStyle::Horizontal, BarStyle::Vertical, BarStyle::Ring, BarStyle::Blocks][x - ID_BARSTYLE],
             ID_SHOW_ACTIVITY => { let v = !c.claude.show_activity; for p in c.providers_mut() { p.show_activity = v; } }
             ID_SHOW_REMAINING => c.ui.show_remaining = !c.ui.show_remaining,
             ID_PROVIDER => c.claude.enabled = !c.claude.enabled,
@@ -852,7 +917,6 @@ unsafe fn apply_command(hwnd: HWND, id: usize) -> bool {
             ID_ALERT_INPUT => c.alerts.notify_needs_input = !c.alerts.notify_needs_input,
             x if (ID_THRESH..ID_THRESH + THRESHOLD_PRESETS.len()).contains(&x) => c.alerts.thresholds = THRESHOLD_PRESETS[x - ID_THRESH].to_vec(),
             x if (ID_FONT..ID_FONT + FONTS.len()).contains(&x) => c.ui.font = FONTS[x - ID_FONT].to_string(),
-            ID_OC_FREE => c.ui.opencode_free_icon_only = !c.ui.opencode_free_icon_only,
             x if (ID_CHATWIN..ID_CHATWIN + CHAT_WINDOWS.len()).contains(&x) => c.ui.chat_window_mins = CHAT_WINDOWS[x - ID_CHATWIN],
             ID_AUTOSTART => { let on = !autostart_enabled(); set_autostart(on); c.ui.autostart = on; }
             ID_AUTO => c.ui.auto_mode = !c.ui.auto_mode,
@@ -860,11 +924,14 @@ unsafe fn apply_command(hwnd: HWND, id: usize) -> bool {
             ID_ANCHOR => c.ui.anchor = Anchor::BesideTray,
             x if x == ID_ANCHOR + 1 => c.ui.anchor = Anchor::TaskbarStart,
             x if x == ID_ANCHOR + 2 => c.ui.anchor = Anchor::TaskbarCenter,
+            // "Livre": parte da posição atual e já destrava para arrastar.
+            x if x == ID_ANCHOR + 3 => { c.ui.anchor = Anchor::Custom; c.ui.locked = false; if let Some(o) = free_offset { c.ui.bar_offset = o; } }
             x if (ID_MONITOR..ID_MONITOR + 16).contains(&x) => c.ui.monitor = (x - ID_MONITOR) as u32,
             _ => return false,
         }
     }
     sh.save();
+    if (ID_PROVIDER..ID_PROVIDER + 3).contains(&id) { request_refresh(); } // provedor recém-ligado: busca já os limites
     true
 }
 

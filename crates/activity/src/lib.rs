@@ -98,7 +98,20 @@ pub fn handle_claude_hook(dir: &Path, stdin: &str, now: i64) -> std::io::Result<
 }
 
 /// Nome do chat no transcript do Claude Code (`custom-title`, senão `agent-name`). Lê só o final do arquivo.
+/// Só lê `.jsonl` dentro da pasta de dados do Claude (`~/.claude` ou `CLAUDE_CONFIG_DIR`): caminhos de rede (UNC)
+/// ou dispositivos podem travar o hook, que roda dentro do Claude Code.
+pub fn transcript_allowed(path: &str) -> bool {
+    let norm = |s: &str| s.replace('\\', "/").to_lowercase();
+    let p = norm(path);
+    if p.starts_with("//") || !p.ends_with(".jsonl") || p.contains("/../") { return false; }
+    let home = std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default();
+    let mut roots = vec![format!("{}/.claude/", norm(home.trim_end_matches(['\\', '/'])))];
+    if let Ok(c) = std::env::var("CLAUDE_CONFIG_DIR") { roots.push(format!("{}/", norm(c.trim_end_matches(['\\', '/'])))); }
+    roots.iter().any(|r| r.len() > 2 && p.starts_with(r.as_str()))
+}
+
 pub fn transcript_title(path: &str) -> Option<String> {
+    if !transcript_allowed(path) { return None; }
     use std::io::{Read, Seek, SeekFrom};
     let mut f = std::fs::File::open(path).ok()?;
     let len = f.metadata().ok()?.len();
@@ -290,6 +303,10 @@ mod chats_tests {
         std::fs::create_dir_all(&d).unwrap();
         let tp = d.join("t.jsonl");
         std::fs::write(&tp, t).unwrap();
+        assert!(!transcript_allowed(&tp.to_string_lossy())); // fora da pasta do Claude: ignorado
+        assert!(!transcript_allowed("\\\\10.0.0.1\\share\\x.jsonl") && !transcript_allowed("CON"));
+        std::env::set_var("CLAUDE_CONFIG_DIR", &d); // agora o temporário conta como pasta do Claude
+        assert!(transcript_allowed(&tp.to_string_lossy()));
         let ev = format!(r#"{{"hook_event_name":"UserPromptSubmit","session_id":"a","cwd":"C:/x/App","prompt":"faz algo","transcript_path":{}}}"#, serde_json::to_string(&tp.to_string_lossy()).unwrap());
         handle_claude_hook(&d, &ev, 100).unwrap();
         let c = chats(&d, "claude", 110, 600);

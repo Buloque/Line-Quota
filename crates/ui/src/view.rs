@@ -1,5 +1,5 @@
 //! Converte o estado dos provedores em itens desenháveis (puro, testável sem Win32).
-use lq_core::config::{Config, DisplayMode, LabelStyle};
+use lq_core::config::{BarStyle, Config, DisplayMode, LabelStyle};
 use lq_core::model::{AgentDetail, AgentState, ChatInfo, MeterKind, ProviderId, Usage};
 use std::collections::HashSet;
 
@@ -11,8 +11,8 @@ pub enum Seg {
     Text(String, Level),
     /// Ícone do provedor.
     Icon(ProviderId),
-    /// Barra de progresso: preenchimento de 0.0 a 1.0 e cor.
-    Bar(f32, Level),
+    /// Gráfico de progresso: preenchimento de 0.0 a 1.0, cor e formato.
+    Bar(f32, Level, BarStyle),
 }
 
 #[derive(Clone, PartialEq)]
@@ -58,8 +58,9 @@ pub fn segments(rows: &[ProviderRow], cfg: &Config) -> Vec<Seg> {
         match cfg.ui.labels {
             LabelStyle::Icon => out.push(Seg::Icon(row.id)),
             LabelStyle::Text => out.push(text(label(row.id), Level::Dim)),
+            LabelStyle::None => {}
         }
-        out.push(text(" ", Level::Dim));
+        if cfg.ui.labels != LabelStyle::None { out.push(text(" ", Level::Dim)); }
         match row.activity {
             AgentState::Working if pc.show_activity => out.push(text("● ", Level::Active)),
             AgentState::NeedsInput if pc.show_activity => out.push(text("? ", Level::Attention)),
@@ -68,21 +69,22 @@ pub fn segments(rows: &[ProviderRow], cfg: &Config) -> Vec<Seg> {
         match &row.result {
             Err(_) => out.push(text("!", Level::Crit)),
             Ok(u) if u.meters.is_empty() && row.id == ProviderId::OpenCode => {
-                // Sem plano pago não há limite a medir.
-                if cfg.ui.opencode_free_icon_only { if matches!(out.last(), Some(Seg::Text(t, _)) if t == " ") { out.pop(); } } else { out.push(text("grátis", Level::Dim)); }
+                // Sem plano pago não há limite a medir: fica só o ícone (sem o espaço sobrando).
+                if matches!(out.last(), Some(Seg::Text(t, _)) if t == " ") { out.pop(); }
+                if cfg.ui.labels == LabelStyle::None { out.push(text(label(row.id), Level::Dim)); } // senão a linha ficaria vazia
             }
             Ok(u) => {
                 let mut first = true;
-                for (kind, show, tag) in [(MeterKind::FiveHour, pc.show_five_hour, "5h"), (MeterKind::Weekly, pc.show_weekly, "7d"), (MeterKind::Monthly, pc.show_monthly, "30d")] {
+                for (kind, show, tag) in [(MeterKind::FiveHour, pc.show_five_hour, "5h"), (MeterKind::Weekly, pc.show_weekly, "7d"), (MeterKind::Monthly, true, "30d")] {
                     if !show { continue; }
                     let Some(m) = u.meter(kind) else { continue };
                     if !first { out.push(text("  ", Level::Dim)); }
                     first = false;
                     let v = if cfg.ui.show_remaining { m.remaining_pct() } else { m.used_pct };
-                    out.push(text(format!("{tag} "), Level::Dim));
+                    if cfg.ui.show_tags { out.push(text(format!("{tag} "), Level::Dim)); }
                     let lvl = level(m.used_pct);
                     if matches!(cfg.ui.display, DisplayMode::Bar | DisplayMode::Both) {
-                        out.push(Seg::Bar(v / 100.0, lvl));
+                        out.push(Seg::Bar(v / 100.0, lvl, cfg.ui.bar_style));
                     }
                     if matches!(cfg.ui.display, DisplayMode::Number | DisplayMode::Both) {
                         if cfg.ui.display == DisplayMode::Both { out.push(text(" ", Level::Dim)); }
@@ -289,7 +291,7 @@ mod tests {
         s.iter().map(|x| match x {
             Seg::Text(t, _) => t.clone(),
             Seg::Icon(id) => format!("<{}>", label(*id)),
-            Seg::Bar(f, _) => format!("[{:.0}]", f * 100.0),
+            Seg::Bar(f, _, _) => format!("[{:.0}]", f * 100.0),
         }).collect()
     }
 
@@ -297,6 +299,8 @@ mod tests {
         let mut c = Config::default();
         c.ui.display = display;
         c.ui.labels = labels;
+        c.ui.auto_mode = false; // os testes ligam o modo automático quando precisam
+        c.ui.auto_hide_when_none = false;
         c
     }
 
@@ -308,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn free_codex_shows_the_monthly_limit_with_its_own_toggle() {
+    fn free_codex_always_shows_the_monthly_limit() {
         use lq_core::model::Meter;
         let free = ProviderRow {
             id: ProviderId::Codex, activity: AgentState::Idle, running: true, detail: None, chats: vec![],
@@ -318,10 +322,23 @@ mod tests {
         assert_eq!(flat(&segments(&[free.clone()], &c)), "Cx 30d 12%");
         c.codex.show_weekly = false; // esconder o semanal não esconde o mensal
         assert_eq!(flat(&segments(&[free.clone()], &c)), "Cx 30d 12%");
-        c.codex.show_monthly = false;
-        assert_eq!(flat(&segments(&[free.clone()], &c)), "Cx ");
         assert!(tooltip(&[free.clone()], &Config::default()).contains("30d 12%"));
         assert!(limit_lines(&free, 0).iter().any(|l| l.label == "Mensal"));
+    }
+
+
+    #[test]
+    fn tags_can_be_hidden_and_styles_are_carried_to_the_bars() {
+        let mut c = cfg(DisplayMode::Bar, LabelStyle::Text);
+        c.ui.show_tags = false;
+        assert_eq!(flat(&segments(&[row(42.0, 10.0)], &c)), "Cx [42]  [10]");
+        c.ui.bar_style = BarStyle::Ring;
+        assert!(segments(&[row(42.0, 10.0)], &c).contains(&Seg::Bar(0.42, Level::Normal, BarStyle::Ring)));
+    }
+    #[test]
+    fn no_identification_shows_only_the_limits() {
+        let s = segments(&[row(42.0, 10.0)], &cfg(DisplayMode::Number, LabelStyle::None));
+        assert_eq!(flat(&s), "5h 42%  7d 10%");
     }
 
     #[test]
@@ -429,12 +446,10 @@ mod free_tests {
     }
 
     #[test]
-    fn free_opencode_icon_only_or_label() {
+    fn free_opencode_shows_only_the_icon() {
         let mut c = Config::default();
         c.ui.labels = LabelStyle::Icon;
         assert_eq!(segments(&[oc()], &c), vec![Seg::Icon(ProviderId::OpenCode)]);
-        c.ui.opencode_free_icon_only = false;
-        assert!(segments(&[oc()], &c).contains(&Seg::Text("grátis".into(), Level::Dim)));
     }
 }
 

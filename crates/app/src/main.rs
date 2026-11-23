@@ -11,7 +11,7 @@ use lq_ui::view::ProviderRow;
 use lq_ui::win::{self, Shared};
 use std::io::Read;
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::{Duration, Instant};
 
 fn config_path() -> PathBuf {
@@ -109,29 +109,55 @@ fn main() {
     let idle = Duration::from_secs(cfg.codex.refresh_idle_secs.max(30));
     let shared = Shared::new(cfg, config_path(), std::sync::Arc::new(ClaudeAccount));
     let (tx, rx) = mpsc::channel::<()>();
+    type Slot = Option<Result<lq_core::model::Usage, String>>;
+    let usage: Arc<Mutex<Vec<Slot>>> = Arc::new(Mutex::new(vec![None; 3]));
 
+    // Thread de rede: busca os limites no intervalo configurado ou sob pedido. Chamadas lentas
+    // (até 10–15 s) ficam aqui e nunca seguram a atividade, os alertas nem a UI.
+    {
+        let (s, usage) = (shared.clone(), usage.clone());
+        std::thread::spawn(move || {
+            let provs = providers();
+            loop {
+                let cfg = s.config.lock().unwrap().clone();
+                for (i, p) in provs.iter().enumerate().filter(|(_, p)| !p.local_only() && cfg.provider(p.id()).enabled) {
+                    let r = p.fetch();
+                    usage.lock().unwrap()[i] = Some(r);
+                }
+                let fetched = Instant::now();
+                // Espera o intervalo ou um pedido de atualização; pedidos em sequência viram uma só busca (mín. 5 s).
+                if rx.recv_timeout(idle).is_ok() {
+                    while rx.try_recv().is_ok() {}
+                    std::thread::sleep(Duration::from_secs(5).saturating_sub(fetched.elapsed()));
+                    while rx.try_recv().is_ok() {}
+                }
+            }
+        });
+    }
+
+    // Thread local (tick de 2 s): só leitura de arquivos/processos; provedores desligados não são consultados.
     let s = shared.clone();
     std::thread::spawn(move || {
         let provs = providers();
-        let mut usage: Vec<Option<Result<lq_core::model::Usage, String>>> = provs.iter().map(|_| None).collect();
-        let mut last_fetch: Option<Instant> = None;
         let mut notifier = Notifier::default();
         loop {
-            // Uso (rede/arquivo) só no intervalo configurado ou sob pedido; atividade a cada tick (barato).
-            if last_fetch.map_or(true, |t| t.elapsed() >= idle) {
-                for (i, p) in provs.iter().enumerate() { usage[i] = Some(p.fetch()); }
-                last_fetch = Some(Instant::now());
-            } else {
-                for (i, p) in provs.iter().enumerate().filter(|(_, p)| p.local_only()) { usage[i] = Some(p.fetch()); }
+            let cfg = s.config.lock().unwrap().clone();
+            for (i, p) in provs.iter().enumerate().filter(|(_, p)| p.local_only() && cfg.provider(p.id()).enabled) {
+                let r = p.fetch();
+                usage.lock().unwrap()[i] = Some(r);
             }
             // Programas abertos (modo automático): processo em execução ou atividade registrada.
-            let cfg = s.config.lock().unwrap().clone();
             let open = lq_activity::procs::running_exes();
-            let rows: Vec<ProviderRow> = provs.iter().zip(&usage).map(|(p, u)| {
+            let snapshot: Vec<Slot> = usage.lock().unwrap().clone();
+            let rows: Vec<ProviderRow> = provs.iter().zip(&snapshot).map(|(p, u)| {
+                let result = u.clone().unwrap_or_else(|| Err("carregando".into()));
+                if !cfg.provider(p.id()).enabled {
+                    return ProviderRow { id: p.id(), result, activity: lq_core::model::AgentState::Idle, running: false, detail: None, chats: Vec::new() };
+                }
                 let activity = p.activity();
                 let running = activity != lq_core::model::AgentState::Idle
                     || lq_activity::procs::any_running(&open, &cfg.provider(p.id()).processes);
-                ProviderRow { id: p.id(), result: u.clone().unwrap_or_else(|| Err("carregando".into())), activity, running, detail: p.detail(), chats: p.chats() }
+                ProviderRow { id: p.id(), result, activity, running, detail: p.detail(), chats: p.chats() }
             }).collect();
             // Alertas: limiares, renovação, tarefa concluída e pedido de resposta.
             let snaps: Vec<Snap> = rows.iter().filter(|r| cfg.provider(r.id).enabled)
@@ -139,8 +165,7 @@ fn main() {
             for n in notifier.update(&snaps, &cfg.alerts, now_secs()) { s.toast(n); }
             let changed = *s.rows.lock().unwrap() != rows;
             if changed { *s.rows.lock().unwrap() = rows; s.notify(); }
-            // Tick de 2 s; um pedido manual de refresh força nova busca de uso.
-            if rx.recv_timeout(Duration::from_secs(2)).is_ok() { last_fetch = None; }
+            std::thread::sleep(Duration::from_secs(2));
         }
     });
 

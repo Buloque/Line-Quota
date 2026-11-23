@@ -16,13 +16,26 @@ fn codex_home() -> PathBuf {
 }
 
 /// Lê `chatgpt_base_url` do config.toml (linha simples `chave = "valor"`).
+/// HTTPS, ou http apenas para a própria máquina; sem credenciais embutidas na URL.
+fn safe_base(u: &str) -> bool {
+    let rest = if let Some(r) = u.strip_prefix("https://") { r }
+        else if let Some(r) = u.strip_prefix("http://") {
+            let host = r.split(['/', ':']).next().unwrap_or("");
+            if host != "localhost" && host != "127.0.0.1" { return false; }
+            r
+        } else { return false };
+    let authority = rest.split('/').next().unwrap_or("");
+    !authority.is_empty() && !authority.contains('@') && !u.contains(char::is_whitespace)
+}
+
 fn base_url(config_toml: &str) -> String {
     for line in config_toml.lines() {
         let line = line.trim();
         if let Some(rest) = line.strip_prefix("chatgpt_base_url") {
             if let Some(v) = rest.trim_start().strip_prefix('=') {
                 let v = v.trim().trim_matches(|c| c == '"' || c == '\'').trim_end_matches('/');
-                if !v.is_empty() {
+                // O token vai nesse endereço: só HTTPS (ou http local, para testes). Qualquer outra coisa é ignorada.
+                if safe_base(v) {
                     return v.to_string();
                 }
             }
@@ -97,7 +110,23 @@ impl Provider for Codex {
 
     fn chats(&self) -> Vec<lq_core::model::ChatInfo> { chats() }
 
-    fn fetch(&self) -> Result<Usage, String> {
+    fn fetch(&self) -> Result<Usage, String> { cached_fetch() }
+}
+
+/// A mesma chamada serve Codex e OpenCode (e cliques repetidos em "atualizar"): reaproveita por alguns segundos.
+fn cached_fetch() -> Result<Usage, String> {
+    static SLOT: std::sync::Mutex<Option<(std::time::Instant, Result<Usage, String>)>> = std::sync::Mutex::new(None);
+    let mut s = SLOT.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, r)) = s.as_ref() {
+        if at.elapsed() < Duration::from_secs(if r.is_ok() { 20 } else { 10 }) { return r.clone(); }
+    }
+    let r = fetch_uncached();
+    *s = Some((std::time::Instant::now(), r.clone()));
+    r
+}
+
+fn fetch_uncached() -> Result<Usage, String> {
+    {
         let home = codex_home();
         let auth = std::fs::read_to_string(home.join("auth.json")).map_err(|_| "Codex não logado (auth.json ausente)".to_string())?;
         let (token, account) = parse_auth(&auth)?;
@@ -157,7 +186,12 @@ mod tests {
 
     #[test]
     fn base_url_override() {
-        assert_eq!(base_url("chatgpt_base_url = \"http://x/y/\"\n"), "http://x/y");
+        assert_eq!(base_url("chatgpt_base_url = \"https://x.example/y/\"\n"), "https://x.example/y");
+        assert_eq!(base_url("chatgpt_base_url = \"http://localhost:8080/y\"\n"), "http://localhost:8080/y");
+        // o token não pode ir para http remoto, esquemas estranhos nem URL com usuário@host
+        for bad in ["http://evil.example/x", "ftp://x", "https://user@evil.example/", "https://", "evil.example"] {
+            assert_eq!(base_url(&format!("chatgpt_base_url = \"{bad}\"\n")), DEFAULT_BASE, "{bad}");
+        }
         assert_eq!(base_url("model=\"a\""), DEFAULT_BASE);
     }
 
@@ -234,7 +268,20 @@ fn read_ends(p: &std::path::Path) -> Option<(String, String)> {
 }
 
 fn session_age() -> Option<(PathBuf, u64)> {
-    let (p, m) = latest_session(&codex_home().join("sessions"))?;
+    // activity() e detail() chamam isto a cada tick: a varredura de diretórios é reaproveitada por ~1,5 s.
+    static LATEST: std::sync::Mutex<Option<(std::time::Instant, Option<(PathBuf, std::time::SystemTime)>)>> = std::sync::Mutex::new(None);
+    let latest = {
+        let mut c = LATEST.lock().unwrap_or_else(|e| e.into_inner());
+        match c.as_ref() {
+            Some((at, v)) if at.elapsed() < Duration::from_millis(1500) => v.clone(),
+            _ => {
+                let v = latest_session(&codex_home().join("sessions"));
+                *c = Some((std::time::Instant::now(), v.clone()));
+                v
+            }
+        }
+    };
+    let (p, m) = latest?;
     Some((p, std::time::SystemTime::now().duration_since(m).ok()?.as_secs()))
 }
 
@@ -339,16 +386,36 @@ fn read_index_tail(home: &std::path::Path) -> String {
     if len > cap { s.split_once('\n').map(|x| x.1.to_string()).unwrap_or_default() } else { s }
 }
 
+/// Parte do chat que só muda quando o arquivo da sessão muda (evita reler/parsear ~MB a cada atualização).
+#[derive(Clone)]
+struct ChatBase { detail: lq_core::model::AgentDetail, first: Option<String> }
+
 fn load_chats() -> Vec<lq_core::model::ChatInfo> {
+    static PARSED: std::sync::Mutex<Option<std::collections::HashMap<PathBuf, (u64, std::time::SystemTime, ChatBase)>>> = std::sync::Mutex::new(None);
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
     let names = thread_names(&read_index_tail(&codex_home()));
-    recent_sessions(&codex_home().join("sessions")).into_iter().filter_map(|(p, age)| {
-        let (head, tail) = read_ends(&p)?;
-        let d = detail_from_lines(&head, &tail, now - age as i64);
+    let sessions = recent_sessions(&codex_home().join("sessions"));
+    let mut cache = PARSED.lock().unwrap_or_else(|e| e.into_inner());
+    let map = cache.get_or_insert_with(Default::default);
+    map.retain(|p, _| sessions.iter().any(|(s, _)| s == p)); // não cresce: só as sessões recentes
+    sessions.into_iter().filter_map(|(p, age)| {
+        let meta = std::fs::metadata(&p).ok()?;
+        let key = (meta.len(), meta.modified().ok()?);
+        let base = match map.get(&p) {
+            Some((len, m, b)) if (*len, *m) == key => b.clone(),
+            _ => {
+                let (head, tail) = read_ends(&p)?;
+                let b = ChatBase { detail: detail_from_lines(&head, &tail, 0), first: first_prompt(&read_head_text(&p)) };
+                map.insert(p.clone(), (key.0, key.1, b.clone()));
+                b
+            }
+        };
+        let mut d = base.detail;
+        d.updated = Some(now - age as i64);
         let stem = p.file_stem()?.to_string_lossy().to_string();
         // Nome do chat; sem nome, o primeiro pedido.
         let title = names.get(session_uuid(&stem)).cloned()
-            .or_else(|| first_prompt(&read_head_text(&p))).or_else(|| d.prompt.clone()).unwrap_or_else(|| "Chat".into());
+            .or(base.first).or_else(|| d.prompt.clone()).unwrap_or_else(|| "Chat".into());
         Some(lq_core::model::ChatInfo {
             id: stem,
             project: d.project.clone(), title,

@@ -7,8 +7,6 @@ pub struct ProviderConfig {
     pub enabled: bool,
     pub show_five_hour: bool,
     pub show_weekly: bool,
-    /// Limite mensal (Codex no plano gratuito).
-    pub show_monthly: bool,
     pub show_activity: bool,
     pub refresh_idle_secs: u64,
     pub refresh_active_secs: u64,
@@ -18,7 +16,7 @@ pub struct ProviderConfig {
 
 impl Default for ProviderConfig {
     fn default() -> Self {
-        Self { enabled: true, show_five_hour: true, show_weekly: true, show_monthly: true, show_activity: true,
+        Self { enabled: true, show_five_hour: true, show_weekly: true, show_activity: true,
                refresh_idle_secs: 300, refresh_active_secs: 60, processes: Vec::new() }
     }
 }
@@ -64,7 +62,22 @@ pub enum DisplayMode { Number, Bar, #[default] Both }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "lowercase")]
-pub enum LabelStyle { #[default] Icon, Text }
+pub enum LabelStyle { #[default] Icon, Text, /// Sem identificação do provedor (só os limites).
+    None }
+
+/// Formato do gráfico de cada limite.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum BarStyle {
+    /// Barra horizontal.
+    #[default] Horizontal,
+    /// Barra vertical (em pé).
+    Vertical,
+    /// Anel (círculo que se preenche).
+    Ring,
+    /// Cinco blocos (cada um vale 20%).
+    Blocks,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
@@ -75,6 +88,10 @@ pub struct UiConfig {
     pub autostart: bool,
     /// Número, barra de progresso ou ambos.
     pub display: DisplayMode,
+    /// Formato do gráfico (barra horizontal, vertical, círculo ou blocos).
+    pub bar_style: BarStyle,
+    /// Mostra os rótulos de texto dos limites (5h / 7d / 30d). Desligado: só os gráficos.
+    pub show_tags: bool,
     /// Ícone do provedor ou texto (Cl/Cx).
     pub labels: LabelStyle,
     pub anchor: Anchor,
@@ -93,8 +110,6 @@ pub struct UiConfig {
     pub locked: bool,
     /// Fonte do widget (se não estiver instalada, usa Segoe UI).
     pub font: String,
-    /// OpenCode sem plano pago (sem limites a medir): mostra só o ícone; desligado mostra "grátis".
-    pub opencode_free_icon_only: bool,
     /// Painel em árvore: só chats em execução ou ativos nesta janela (minutos).
     pub chat_window_mins: u32,
 }
@@ -102,9 +117,9 @@ pub struct UiConfig {
 impl Default for UiConfig {
     fn default() -> Self {
         Self { compact: true, show_remaining: false, exact_reset_time: false, autostart: true,
-               display: DisplayMode::Both, labels: LabelStyle::Icon, anchor: Anchor::BesideTray,
-               monitor: 0, bar_offset: 0, transparent: true, auto_mode: false, auto_hide_when_none: false,
-               locked: true, font: "Calibri".into(), opencode_free_icon_only: true, chat_window_mins: 30 }
+               display: DisplayMode::Both, bar_style: BarStyle::Horizontal, show_tags: true, labels: LabelStyle::Icon, anchor: Anchor::BesideTray,
+               monitor: 0, bar_offset: 0, transparent: true, auto_mode: true, auto_hide_when_none: true,
+               locked: true, font: "Calibri".into(), chat_window_mins: 30 }
     }
 }
 
@@ -191,7 +206,7 @@ mod tests {
         let c = Config::from_toml("[claude]\nenabled = true\n[ui]\ndisplay = \"bar\"").unwrap();
         assert_eq!(c.claude.processes, vec!["claude.exe"]);
         assert!(c.opencode.processes.contains(&"opencode-cli.exe".to_string()));
-        assert!(c.ui.transparent && !c.ui.auto_mode);
+        assert!(c.ui.transparent && c.ui.auto_mode);
     }
 
     #[test]
@@ -201,13 +216,14 @@ mod tests {
     }
 
     #[test]
-    fn defaults_lock_the_bar_use_calibri_and_show_monthly() {
+    fn new_defaults() {
         let c = Config::default();
-        assert!(c.ui.locked && c.codex.show_monthly);
-        assert_eq!(c.ui.font, "Calibri");
-        // configs antigas (sem os campos novos) também vêm travadas e com o limite mensal ligado
-        let old = Config::from_toml("[ui]\nanchor = \"custom\"\nbar_offset = 300").unwrap();
-        assert!(old.ui.locked && old.claude.show_monthly);
+        assert!(c.ui.locked && c.ui.auto_mode && c.ui.auto_hide_when_none && c.ui.show_tags);
+        assert_eq!((c.ui.font.as_str(), c.ui.bar_style), ("Calibri", BarStyle::Horizontal));
+        // configs antigas (com campos removidos e sem os novos) continuam carregando
+        let old = Config::from_toml("[ui]\nanchor = \"custom\"\nopencode_free_icon_only = false\nbar_style = \"ring\"\n[claude]\nshow_monthly = true").unwrap();
+        assert!(old.ui.locked && old.ui.show_tags);
+        assert_eq!(old.ui.bar_style, BarStyle::Ring);
     }
 
     #[test]

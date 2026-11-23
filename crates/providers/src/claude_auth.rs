@@ -65,12 +65,21 @@ pub fn needs_refresh(t: &Tokens, now_ms: i64) -> bool { t.expires_at_ms - now_ms
 
 // ---------- Armazenamento ----------
 
+/// Serializa gravação/remoção do login (poller, login e logout rodam em threads diferentes).
+static STORE: Mutex<()> = Mutex::new(());
+
 fn save(t: &Tokens) -> Result<(), String> {
     let plain = json!({"a": t.access, "r": t.refresh, "e": t.expires_at_ms}).to_string();
     let enc = secure::protect(plain.as_bytes())?;
     let p = store_path();
     if let Some(d) = p.parent() { let _ = std::fs::create_dir_all(d); }
-    std::fs::write(p, enc).map_err(|_| "não foi possível salvar o login".to_string())
+    // Atômico: um disco cheio ou um desligamento no meio não corrompe o login (o refresh token já foi rotacionado).
+    let tmp = p.with_extension("bin.tmp");
+    let _g = STORE.lock().unwrap_or_else(|e| e.into_inner());
+    std::fs::write(&tmp, enc).and_then(|_| std::fs::rename(&tmp, &p)).map_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+        "não foi possível salvar o login".to_string()
+    })
 }
 
 fn load() -> Option<Result<Tokens, String>> {
@@ -85,6 +94,7 @@ fn load() -> Option<Result<Tokens, String>> {
 pub fn logged_in() -> bool { store_path().exists() }
 
 pub fn logout() {
+    let _g = STORE.lock().unwrap_or_else(|e| e.into_inner());
     *PENDING.lock().unwrap() = None;
     let _ = std::fs::remove_file(store_path());
     GENERATION.fetch_add(1, Ordering::Relaxed);
@@ -140,7 +150,8 @@ pub fn begin(full_scope: bool) -> Result<String, String> {
 pub fn complete(pasted: &str, now_ms: i64) -> Result<(), String> {
     let pending = PENDING.lock().unwrap().take().ok_or("Clique primeiro em \"Entrar no Claude\"")?;
     let (code, state) = parse_pasted(pasted)?;
-    if state.as_deref().is_some_and(|s| s != pending.state) {
+    // O state é obrigatório (CSRF): o texto colado precisa ser CÓDIGO#STATE.
+    if state.as_deref() != Some(pending.state.as_str()) {
         return Err("O código não corresponde a este login (state diferente). Tente entrar de novo.".into());
     }
     let t = exchange(&code, &pending.state, &pending.verifier, now_ms)?;
@@ -154,7 +165,12 @@ pub fn complete(pasted: &str, now_ms: i64) -> Result<(), String> {
 pub fn access_token(now_ms: i64) -> Option<Result<String, String>> {
     let t = match load()? { Ok(t) => t, Err(e) => return Some(Err(e)) };
     if !needs_refresh(&t, now_ms) { return Some(Ok(t.access)); }
-    Some(refresh(&t, now_ms).and_then(|n| { save(&n)?; Ok(n.access) }))
+    let gen0 = GENERATION.load(Ordering::Relaxed);
+    Some(refresh(&t, now_ms).and_then(|n| {
+        // Se houve logout/novo login durante a renovação (rede), não ressuscita as credenciais antigas.
+        if GENERATION.load(Ordering::Relaxed) == gen0 && store_path().exists() { save(&n)?; }
+        Ok(n.access)
+    }))
 }
 
 #[cfg(test)]

@@ -8,6 +8,8 @@ use std::path::PathBuf;
 const SNAPSHOT: &str = "claude.json";
 const WORKING_STALE_SECS: i64 = 30 * 60;
 const SNAPSHOT_FRESH_SECS: i64 = 15 * 60;
+/// Snapshot gravado a partir do OAuth: vale pouco (o OAuth é consultado de novo depois disso).
+const OAUTH_SNAPSHOT_FRESH_SECS: i64 = 3 * 60;
 
 pub struct Claude { pub dir: PathBuf, oauth: crate::claude_oauth::OAuth }
 
@@ -74,11 +76,12 @@ impl Provider for Claude {
         let snap = std::fs::read_to_string(self.dir.join(SNAPSHOT)).ok();
         let fresh = snap.as_deref().and_then(|t| {
             let ts = serde_json::from_str::<Value>(t).ok()?["ts"].as_i64()?;
-            (now - ts < SNAPSHOT_FRESH_SECS).then(|| usage_from_snapshot(t, now).ok()).flatten()
+            let limit = if serde_json::from_str::<Value>(t).ok()?["src"] == "oauth" { OAUTH_SNAPSHOT_FRESH_SECS } else { SNAPSHOT_FRESH_SECS };
+            (now - ts < limit).then(|| usage_from_snapshot(t, now).ok()).flatten()
         });
         if let Some(u) = fresh { return Ok(u); }
         match self.oauth.get(now * 1000) {
-            Ok(u) => Ok(u),
+            Ok(u) => { let _ = store_oauth_snapshot(&self.dir, &u, now); Ok(u) } // sobrevive a reinícios e a falhas (ex.: HTTP 429)
             Err(e) => snap.as_deref().and_then(|t| usage_from_snapshot(t, now).ok()).ok_or(e),
         }
     }
@@ -124,6 +127,34 @@ mod tests {
     fn write_returns_status_line() {
         let d = std::env::temp_dir().join(format!("lq-claude-{}", std::process::id()));
         assert_eq!(write_snapshot(&d, INPUT, 1000).unwrap(), "5h 24% · 7d 41%");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
+/// Grava o último uso obtido pelo OAuth no mesmo formato do snapshot do statusLine (marcado `src: oauth`).
+fn store_oauth_snapshot(dir: &std::path::Path, u: &Usage, now: i64) -> std::io::Result<()> {
+    let win = |k: MeterKind| u.meter(k).map_or(Value::Null, |m| json!({"used": m.used_pct, "resets_at": m.resets_at}));
+    let snap = json!({"ts": now, "src": "oauth", "five_hour": win(MeterKind::FiveHour), "seven_day": win(MeterKind::Weekly)});
+    std::fs::create_dir_all(dir)?;
+    let tmp = dir.join("claude.json.tmp");
+    std::fs::write(&tmp, snap.to_string())?;
+    std::fs::rename(&tmp, dir.join(SNAPSHOT))
+}
+
+#[cfg(test)]
+mod oauth_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn last_good_usage_survives_a_failed_refresh() {
+        let d = std::env::temp_dir().join(format!("lq-claude-snap-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        let m = |kind, used_pct| Meter { kind, used_pct, resets_at: Some(9000), estimated: false };
+        let u = Usage { provider: ProviderId::Claude, meters: vec![m(MeterKind::FiveHour, 65.0), m(MeterKind::Weekly, 49.0)] };
+        store_oauth_snapshot(&d, &u, 1000).unwrap();
+        let txt = std::fs::read_to_string(d.join(SNAPSHOT)).unwrap();
+        assert_eq!(usage_from_snapshot(&txt, 1100).unwrap(), u); // antigo, mas melhor que nada
+        assert_eq!(serde_json::from_str::<Value>(&txt).unwrap()["src"], "oauth");
         let _ = std::fs::remove_dir_all(&d);
     }
 }

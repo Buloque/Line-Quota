@@ -25,4 +25,5 @@ deve apagar também as configurações (**purge**). Pela linha de comando: `line
 - A posição vem **travada** (um clique sem querer não move o widget). Para mudar de lugar: *Destravar barra* e
   arraste ao longo da barra; depois *Travar barra* de novo.
 - Fonte padrão: Calibri (mude em *Configurações → Fonte*).
-- Codex no plano gratuito mostra o limite mensal (`30d`), com opção própria em *Configurações → Aparência*.
+- Gráficos: barra horizontal, vertical, círculo ou blocos, com ou sem número e com ou sem os rótulos (5h / 7d / 30d). Codex no plano gratuito mostra o limite mensal (`30d`) automaticamente.
+- *Configurações → Posição*: onde ancorar, monitor e **Travar a posição na barra**. Modo automático (só o que está aberto) e ocultar o widget vêm ligados em instalações novas.
