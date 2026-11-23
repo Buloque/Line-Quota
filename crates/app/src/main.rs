@@ -134,8 +134,10 @@ mod demo {
                 ],
             },
             ProviderRow { id: ProviderId::Codex, result: Ok(codex), activity: AgentState::Idle, running: true, detail: None, chats: vec![] },
-            ProviderRow { id: ProviderId::OpenCode, result: Ok(Usage { provider: ProviderId::OpenCode, meters: vec![] }),
-                activity: AgentState::Idle, running: true, detail: None, chats: vec![] },
+            // OpenCode com login do ChatGPT: consome os mesmos limites de 5 h e semanal.
+            ProviderRow { id: ProviderId::OpenCode, activity: AgentState::Idle, running: true, detail: None, chats: vec![],
+                result: Ok(Usage { provider: ProviderId::OpenCode, meters: vec![
+                    meter(MeterKind::FiveHour, 22.0, 3 * 3600, now), meter(MeterKind::Weekly, 9.0, 5 * 86400, now)] }) },
         ]
     }
 }
