@@ -55,7 +55,7 @@ const ID_SHOW_ACTIVITY: usize = 32;
 const ID_SHOW_REMAINING: usize = 33;
 const ID_TRANSPARENT: usize = 34;
 const ID_TAGS: usize = 35; // rótulos 5h / 7d / 30d
-const ID_PROVIDER: usize = 40; // +0 claude, +1 codex, +2 opencode, +3 cursor
+const ID_PROVIDER: usize = 40; // +0 claude, +1 codex, +2 opencode, +3 cursor, +4 antigravity
 const ID_ANCHOR: usize = 50; // +0 bandeja, +1 início, +2 centro
 const ID_AUTO: usize = 55;
 const ID_AUTO_HIDE: usize = 56;
@@ -65,6 +65,11 @@ const ID_CLAUDE_PASTE: usize = 71;
 const ID_CLAUDE_LOGOUT: usize = 72;
 const ID_CURSOR_PASTE: usize = 73;
 const ID_CURSOR_CLEAR: usize = 74;
+const ID_AG_MENU: usize = 75; // botão que abre o menu de cotas do Antigravity
+const ID_AG_GEMINI: usize = 76;
+const ID_AG_CLAUDE_WEEKLY: usize = 77;
+const ID_AG_CLAUDE_5H: usize = 78;
+const ID_AG_COMBINED: usize = 79;
 const ID_FONT: usize = 200; // +i da lista FONTS
 const FONTS: [&str; 7] = ["Segoe UI Variable Text", "Segoe UI", "Bahnschrift", "Cascadia Mono", "Consolas", "Calibri", "Trebuchet MS"];
 const ID_CHATWIN: usize = 210; // +i de CHAT_WINDOWS
@@ -436,6 +441,17 @@ unsafe fn draw_icon(hdc: HDC, id: ProviderId, x: i32, cy: i32, s: i32, light: bo
             let _ = DeleteObject(np);
             let _ = DeleteObject(ep);
         }
+        ProviderId::Antigravity => {
+            // Arco em "A" azul (marca do Antigravity): duas pernas que se encontram no topo e uma barra curta.
+            let p = pen(COLORREF(0x00F48542), (s / 6).max(2));
+            let old = SelectObject(hdc, p);
+            let (top, bot) = (cy - r, cy + r);
+            line(hdc, (cx - r * 85 / 100, bot), (cx, top));
+            line(hdc, (cx, top), (cx + r * 85 / 100, bot));
+            line(hdc, (cx - r * 45 / 100, cy + r * 30 / 100), (cx + r * 45 / 100, cy + r * 30 / 100));
+            SelectObject(hdc, old);
+            let _ = DeleteObject(p);
+        }
     }
 }
 
@@ -451,9 +467,64 @@ fn gauge_size(style: BarStyle) -> (i32, i32) {
 
 /// Desenha um gráfico de progresso (`f` de 0.0 a 1.0) centralizado na altura `height`.
 unsafe fn draw_gauge(hdc: HDC, x: i32, height: i32, f: f32, color: COLORREF, style: BarStyle, light: bool) {
-    let track = COLORREF(if light { 0x00C8C8C8 } else { 0x00484848 });
     let (w, h) = gauge_size(style);
-    let top = (height - h) / 2;
+    draw_gauge_rect(hdc, x, (height - h) / 2, w, h, f, color, style, light, (w / 5).max(2));
+}
+
+/// Mistura `c` (BGR) com `target` (BGR), `pct`% em direção a ele.
+fn mix_color(c: COLORREF, target: u32, pct: u32) -> COLORREF {
+    let ch = |shift: u32| { let a = (c.0 >> shift) & 0xFF; let b = (target >> shift) & 0xFF; (a * (100 - pct) + b * pct) / 100 };
+    COLORREF(ch(0) | (ch(8) << 8) | (ch(16) << 16))
+}
+
+/// Gráfico múltiplo (Antigravity, 2 ou 3 valores): barras lado a lado; no círculo, anéis concêntricos
+/// (o primeiro é o maior). Tamanho (largura, altura).
+fn multi_size(style: BarStyle, n: usize) -> (i32, i32) {
+    let n = n.clamp(2, 3) as i32;
+    match style {
+        BarStyle::Horizontal => { let bw = (bar_w() * if n == 3 { 5 } else { 7 } / 10).max(7); (bw * n + scale(3) * (n - 1), bar_h()) }
+        BarStyle::Vertical => { let bw = (bar_h() + scale(2)).max(6); (bw * n + scale(2) * (n - 1), icon_px()) }
+        BarStyle::Ring => { let d = icon_px() * if n == 3 { 15 } else { 13 } / 10; (d, d) }
+        BarStyle::Blocks => { let (w, h) = gauge_size(style); let (rh, gap) = ((h * 55 / 100).max(3), scale(1).max(1)); (w, rh * n + gap * (n - 1)) }
+    }
+}
+
+unsafe fn draw_multi(hdc: HDC, x: i32, height: i32, parts: &[(f32, COLORREF)], style: BarStyle, light: bool) {
+    let n = parts.len() as i32;
+    let (pw, ph) = multi_size(style, parts.len());
+    let top = (height - ph) / 2;
+    match style {
+        BarStyle::Horizontal | BarStyle::Vertical => {
+            let gap = if style == BarStyle::Horizontal { scale(3) } else { scale(2) };
+            let w1 = (pw - gap * (n - 1)) / n;
+            for (i, (f, c)) in parts.iter().enumerate() {
+                draw_gauge_rect(hdc, x + i as i32 * (w1 + gap), top, w1, ph, f.clamp(0.0, 1.0), *c, style, light, 2);
+            }
+        }
+        BarStyle::Blocks => {
+            let gap = scale(1).max(1);
+            let rh = (ph - gap * (n - 1)) / n;
+            for (i, (f, c)) in parts.iter().enumerate() {
+                draw_gauge_rect(hdc, x, top + i as i32 * (rh + gap), pw, rh, f.clamp(0.0, 1.0), *c, style, light, 2);
+            }
+        }
+        BarStyle::Ring => {
+            // Anéis concêntricos: cada um afastado do anterior pela espessura + 1 px.
+            let t = (pw / (2 * n + 2)).max(2);
+            let step = t + scale(1).max(1);
+            for (i, (f, c)) in parts.iter().enumerate() {
+                let inset = i as i32 * step;
+                // Cada anel num tom: o maior mais escuro, o do meio normal e o menor mais claro.
+                let tone = if i == 0 { mix_color(*c, 0x000000, 38) } else if i + 1 == parts.len() { mix_color(*c, 0xFFFFFF, 42) } else { *c };
+                draw_gauge_rect(hdc, x + inset, top + inset, pw - 2 * inset, ph - 2 * inset, f.clamp(0.0, 1.0), tone, style, light, t);
+            }
+        }
+    }
+}
+
+/// Desenha um gráfico dentro de um retângulo; `ring_t` é a espessura do anel (formato círculo).
+unsafe fn draw_gauge_rect(hdc: HDC, x: i32, top: i32, w: i32, h: i32, f: f32, color: COLORREF, style: BarStyle, light: bool, ring_t: i32) {
+    let track = COLORREF(if light { 0x00C8C8C8 } else { 0x00484848 });
     match style {
         BarStyle::Horizontal => {
             fill(hdc, &RECT { left: x, top, right: x + w, bottom: top + h }, track);
@@ -466,7 +537,8 @@ unsafe fn draw_gauge(hdc: HDC, x: i32, height: i32, f: f32, color: COLORREF, sty
             if fh > 0 { fill(hdc, &RECT { left: x, top: top + h - fh, right: x + w, bottom: top + h }, color); }
         }
         BarStyle::Blocks => {
-            let (bw, gap) = (scale(6), scale(2));
+            let gap = scale(2);
+            let bw = ((w - 4 * gap) / 5).max(2);
             let lit = if f > 0.0 { ((f * 5.0).round() as i32).max(1) } else { 0 };
             for i in 0..5 {
                 let l = x + i * (bw + gap);
@@ -474,7 +546,7 @@ unsafe fn draw_gauge(hdc: HDC, x: i32, height: i32, f: f32, color: COLORREF, sty
             }
         }
         BarStyle::Ring => {
-            let t = (w / 5).max(2);
+            let t = ring_t.max(2);
             let (l, tp, r, b) = (x + t / 2, top + t / 2, x + w - t / 2, top + h - t / 2);
             let null_brush = GetStockObject(NULL_BRUSH);
             let old_brush = SelectObject(hdc, null_brush);
@@ -539,6 +611,14 @@ unsafe fn run_items(hdc: HDC, segs: &[Seg], origin_x: i32, height: i32, draw: bo
                     let _ = DeleteObject(p);
                 }
                 x += d + scale(5);
+            }
+            Seg::Multi(parts, style) => {
+                let (pw, _) = multi_size(*style, parts.len());
+                if draw {
+                    let cols: Vec<(f32, COLORREF)> = parts.iter().map(|(f, l)| (*f, bar_color(*l, light))).collect();
+                    draw_multi(hdc, x, height, &cols, *style, light);
+                }
+                x += pw;
             }
             Seg::Bar(f, l, style) => {
                 let (gw, _) = gauge_size(*style);
@@ -635,7 +715,7 @@ unsafe fn relayout(hwnd: HWND) {
     let _ = DeleteObject(font);
     ReleaseDC(hwnd, hdc);
 
-    let icon_h = icon_px();
+    let icon_h = segs.iter().map(|s| match s { Seg::Multi(p, st) => multi_size(*st, p.len()).1, _ => 0 }).fold(icon_px(), i32::max);
     let (w, h) = (content_w + 2 * scale(8), text_h.max(icon_h) + scale(6));
     let r = if cfg.ui.anchor == Anchor::Custom {
         place_on_bar(t.bar, t.tray, w, h, cfg.ui.bar_offset, scale(4), t.fallback_gap)
@@ -1002,6 +1082,11 @@ unsafe fn apply_command(hwnd: HWND, id: usize) -> bool {
             x if x == ID_PROVIDER + 1 => c.codex.enabled = !c.codex.enabled,
             x if x == ID_PROVIDER + 2 => c.opencode.enabled = !c.opencode.enabled,
             x if x == ID_PROVIDER + 3 => c.cursor.enabled = !c.cursor.enabled,
+        x if x == ID_PROVIDER + 4 => c.antigravity.enabled = !c.antigravity.enabled,
+            ID_AG_GEMINI => c.antigravity_view.gemini = !c.antigravity_view.gemini,
+            ID_AG_CLAUDE_WEEKLY => c.antigravity_view.claude_weekly = !c.antigravity_view.claude_weekly,
+            ID_AG_CLAUDE_5H => c.antigravity_view.claude_5h = !c.antigravity_view.claude_5h,
+            ID_AG_COMBINED => c.antigravity_view.combined = !c.antigravity_view.combined,
             ID_ALERT_ENABLED => c.alerts.enabled = !c.alerts.enabled,
             ID_ALERT_TOAST => c.alerts.toast = !c.alerts.toast,
             ID_ALERT_SOUND => c.alerts.sound = !c.alerts.sound,
@@ -1024,7 +1109,7 @@ unsafe fn apply_command(hwnd: HWND, id: usize) -> bool {
         }
     }
     sh.save();
-    if (ID_PROVIDER..ID_PROVIDER + 4).contains(&id) { request_refresh(); } // provedor recém-ligado: busca já os limites
+    if (ID_PROVIDER..ID_PROVIDER + 5).contains(&id) { request_refresh(); } // provedor recém-ligado: busca já os limites
     true
 }
 

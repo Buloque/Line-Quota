@@ -3,6 +3,7 @@ pub mod claude_auth;
 pub mod claude_oauth;
 pub mod codex;
 pub mod opencode;
+pub mod antigravity;
 pub mod cursor;
 pub mod cursor_auth;
 pub mod pkce;

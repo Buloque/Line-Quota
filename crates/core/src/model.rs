@@ -7,6 +7,7 @@ pub enum ProviderId {
     Codex,
     OpenCode,
     Cursor,
+    Antigravity,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -15,6 +16,12 @@ pub enum MeterKind {
     Weekly,
     /// Janela de ~30 dias (ex.: Codex no plano gratuito).
     Monthly,
+    /// Antigravity: cota semanal dos modelos Claude (e abertos, como GPT-OSS).
+    Claude,
+    /// Antigravity: cota de 5 horas dos modelos Claude (e abertos).
+    Claude5h,
+    /// Antigravity: cota semanal dos modelos Gemini.
+    Gemini,
 }
 
 /// Uma janela de limite. `used_pct` vai de 0 a 100.

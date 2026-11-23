@@ -82,6 +82,56 @@ pub fn handle_cursor_hook(dir: &Path, stdin: &str, now: i64) -> std::io::Result<
     Ok(reply)
 }
 
+/// Argumentos de ferramenta do Antigravity (PascalCase, ex.: `CommandLine`, `AbsolutePath`) -> as chaves
+/// que o painel entende (`command`, `file_path`, `query`...).
+fn antigravity_args(args: &Value) -> Value {
+    let mut out = serde_json::Map::new();
+    if let Some(m) = args.as_object() {
+        for (k, v) in m {
+            let lower = k.to_ascii_lowercase();
+            let key = match lower.as_str() {
+                "commandline" => "command",
+                "absolutepath" | "targetfile" | "filepath" | "file" => "file_path",
+                other => other,
+            };
+            out.entry(key.to_string()).or_insert_with(|| v.clone());
+        }
+    }
+    Value::Object(out)
+}
+
+/// Processa o JSON que o Antigravity envia ao hook via stdin (`hooks.json`: PreInvocation, PostToolUse, Stop).
+/// Campos usados: `hookEventName`, `conversationId`, `workspacePaths`/`cwd`, `lastUserInput`, `toolCall.{name,args}`.
+/// Devolve `{}` sempre: nunca bloqueia nem injeta nada. O PreInvocation dispara a cada chamada ao modelo, então só
+/// o primeiro de cada pedido conta como "novo pedido"; os demais apenas mantêm o estado de trabalhando.
+pub fn handle_antigravity_hook(dir: &Path, stdin: &str, now: i64) -> std::io::Result<String> {
+    let reply = "{}".to_string();
+    let v: Value = serde_json::from_str(stdin.trim_start_matches('\u{feff}')).unwrap_or(Value::Null);
+    let session = v["conversationId"].as_str().unwrap_or("default");
+    let prompt = v["lastUserInput"].as_str();
+    let event = match v["hookEventName"].as_str().unwrap_or("") {
+        "PreInvocation" => {
+            let known: Value = std::fs::read_to_string(file_for(dir, "antigravity", session)).ok()
+                .and_then(|t| serde_json::from_str(&t).ok()).unwrap_or(Value::Null);
+            let same_turn = known["state"] == "working" && known["prompt"].as_str() == prompt.map(|p| clip(p, 140)).as_deref();
+            if same_turn { "PostToolUse" } else { "UserPromptSubmit" }
+        }
+        "PostToolUse" => "PostToolUse",
+        "Stop" => "Stop",
+        _ => return Ok(reply),
+    };
+    let mut n = json!({"hook_event_name": event, "session_id": session});
+    let dir_of = |k: &str| v[k].as_str().filter(|c| !c.is_empty()).map(str::to_string);
+    if let Some(cwd) = v["workspacePaths"][0].as_str().filter(|c| !c.is_empty()).map(str::to_string).or_else(|| dir_of("cwd")) { n["cwd"] = json!(cwd); }
+    if event == "UserPromptSubmit" { if let Some(p) = prompt { n["prompt"] = json!(p); } }
+    if event == "PostToolUse" && v["toolCall"]["name"].is_string() {
+        n["tool_name"] = v["toolCall"]["name"].clone();
+        n["tool_input"] = antigravity_args(&v["toolCall"]["args"]);
+    }
+    handle_event(dir, "antigravity", &n, now)?;
+    Ok(reply)
+}
+
 fn handle_event(dir: &Path, tool: &str, v: &Value, now: i64) -> std::io::Result<()> {
     let event = v["hook_event_name"].as_str().unwrap_or("");
     let session = v["session_id"].as_str().unwrap_or("default");
@@ -287,6 +337,27 @@ mod tests {
         assert_eq!((x.project.as_deref(), x.prompt.as_deref()), (Some("Meu Proj"), Some("faz isso")));
         assert_eq!((x.tool.as_deref(), x.target.as_deref(), x.since), (Some("Edit"), Some("win.rs"), Some(100)));
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn antigravity_hooks_drive_working_and_idle() {
+        let d = tmp("antigravity");
+        let pre = |now| handle_antigravity_hook(&d, r#"{"hookEventName":"PreInvocation","conversationId":"g1","workspacePaths":["C:\\a\\Meu App"],"lastUserInput":"pesquise pinguins"}"#, now).unwrap();
+        assert_eq!(pre(100), "{}");
+        assert_eq!(aggregate(&d, "antigravity", 105, 1800), AgentState::Working);
+        handle_antigravity_hook(&d, r#"{"hookEventName":"PostToolUse","conversationId":"g1","toolCall":{"name":"run_command","args":{"CommandLine":"npm test"}}}"#, 110).unwrap();
+        // outra chamada ao modelo no mesmo pedido: continua o mesmo pedido (since não reinicia)
+        pre(112);
+        let x = detail(&d, "antigravity", 115).unwrap();
+        assert_eq!((x.project.as_deref(), x.prompt.as_deref(), x.tool.as_deref(), x.target.as_deref(), x.since), (Some("Meu App"), Some("pesquise pinguins"), Some("run_command"), Some("npm test"), Some(100)));
+        assert_eq!(handle_antigravity_hook(&d, r#"{"hookEventName":"Stop","conversationId":"g1","terminationReason":"NO_TOOL_CALL"}"#, 120).unwrap(), "{}");
+        assert_eq!(aggregate(&d, "antigravity", 125, 1800), AgentState::Idle);
+        // mesmo texto depois de parar = novo pedido
+        pre(130);
+        assert_eq!(detail(&d, "antigravity", 131).unwrap().since, Some(130));
+        // eventos desconhecidos e entrada inválida são inofensivos
+        assert_eq!(handle_antigravity_hook(&d, r#"{"hookEventName":"SessionStart","conversationId":"g1"}"#, 140).unwrap(), "{}");
+        assert_eq!(handle_antigravity_hook(&d, "lixo", 140).unwrap(), "{}");
     }
 
     #[test]

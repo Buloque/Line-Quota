@@ -222,6 +222,99 @@ pub fn uninstall_cursor() -> Result<Vec<String>, String> {
     edit_cursor_at(&p, |v| { remove_cursor(v); vec!["hooks do Line Quota removidos do Cursor".into()] })
 }
 
+// ---------------------------------------------------------------------------------------------
+// Antigravity: hooks em ~/.gemini/config/hooks.json (objeto de hooks nomeados). Os nossos ficam sob a chave
+// "line-quota"; as demais chaves (de outros plugins/usuário) nunca são tocadas. Só eventos que não bloqueiam.
+// ---------------------------------------------------------------------------------------------
+const ANTIGRAVITY_KEY: &str = "line-quota";
+
+fn antigravity_hooks_path() -> PathBuf {
+    PathBuf::from(std::env::var("USERPROFILE").unwrap_or_default()).join(".gemini").join("config").join("hooks.json")
+}
+
+/// Comando de um hook do Antigravity. No Windows ele roda `cmd /c <comando>`: o `@` inicial evita a regra do cmd que
+/// tira aspas da primeira/última posição (o caminho do programa fica íntegro), o programa (de janela) lê o JSON do
+/// stdin e a resposta `{}` é dada pelo próprio cmd, sem depender da saída do programa.
+fn antigravity_command(exe: &str) -> String { format!("@\"{exe}\" --hook antigravity >nul & @echo {{}}") }
+
+/// Aplica os hooks do Antigravity num objeto `hooks.json`. Devolve o que mudou (vazio = já estava igual).
+pub fn apply_antigravity(cfg: &mut Value, exe: &str) -> Vec<String> {
+    if !cfg.is_object() { *cfg = json!({}); }
+    let handler = json!({"type": "command", "command": antigravity_command(exe), "timeout": 10});
+    let ours = json!({
+        "PreInvocation": [handler.clone()],
+        "PostToolUse": [{"matcher": "*", "hooks": [handler.clone()]}],
+        "Stop": [handler],
+    });
+    let obj = cfg.as_object_mut().unwrap();
+    if obj.get(ANTIGRAVITY_KEY) == Some(&ours) { return Vec::new(); }
+    obj.insert(ANTIGRAVITY_KEY.into(), ours);
+    vec!["hooks do Antigravity configurados".into()]
+}
+
+pub fn remove_antigravity(cfg: &mut Value) {
+    if let Some(o) = cfg.as_object_mut() { o.remove(ANTIGRAVITY_KEY); }
+}
+
+fn edit_antigravity_at(p: &std::path::Path, f: impl FnOnce(&mut Value) -> Vec<String>) -> Result<Vec<String>, String> {
+    // Sem a pasta ~/.gemini/config o Antigravity não está instalado: não cria nada.
+    if !p.parent().is_some_and(|d| d.is_dir()) {
+        return Ok(vec!["Antigravity não encontrado: integração com o Antigravity ignorada".into()]);
+    }
+    let txt = match std::fs::read_to_string(p) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => "{}".into(),
+        Err(e) => return Err(format!("não consegui ler o hooks.json do Antigravity ({e}); nada foi alterado")),
+    };
+    let t = txt.trim_start_matches('\u{feff}');
+    let mut v: Value = serde_json::from_str(if t.trim().is_empty() { "{}" } else { t })
+        .map_err(|e| format!("hooks.json do Antigravity inválido: {e}"))?;
+    let before = v.clone();
+    let log = f(&mut v);
+    if v == before { return Ok(log); }
+    let bak = p.with_extension("json.lq-bak");
+    if p.is_file() && !bak.exists() { let _ = std::fs::write(&bak, &txt); }
+    let tmp = p.with_extension("json.lq-tmp");
+    std::fs::write(&tmp, serde_json::to_string_pretty(&v).unwrap()).and_then(|_| std::fs::rename(&tmp, p))
+        .map_err(|e| { let _ = std::fs::remove_file(&tmp); e.to_string() })?;
+    Ok(log)
+}
+
+/// Instala os hooks do Antigravity apontando para o executável informado (o instalado).
+pub fn install_antigravity_for(exe: &std::path::Path) -> Result<Vec<String>, String> {
+    let exe = exe.to_string_lossy().replace('\\', "/");
+    // O comando passa pelo cmd: estes caracteres seriam interpretados por ele, então não instalamos com eles.
+    if exe.contains(['%', '"', '^', '!', '&', '|', '<', '>']) {
+        return Err("o caminho do programa tem caracteres que o cmd interpreta (% ^ ! & | < > \")".into());
+    }
+    edit_antigravity_at(&antigravity_hooks_path(), |v| apply_antigravity(v, &exe))
+}
+
+pub fn uninstall_antigravity() -> Result<Vec<String>, String> {
+    let p = antigravity_hooks_path();
+    if !p.is_file() { return Ok(Vec::new()); }
+    edit_antigravity_at(&p, |v| { remove_antigravity(v); vec!["hooks do Line Quota removidos do Antigravity".into()] })
+}
+
+#[cfg(test)]
+mod antigravity_tests {
+    use super::*;
+
+    #[test]
+    fn apply_is_idempotent_and_keeps_other_hooks() {
+        let mut s = json!({"outro": {"Stop": [{"command": "x"}]}});
+        assert!(!apply_antigravity(&mut s, "C:/a/line-quota.exe").is_empty());
+        assert!(apply_antigravity(&mut s, "C:/a/line-quota.exe").is_empty()); // igual: nada a fazer
+        assert_eq!(s["outro"]["Stop"][0]["command"], "x");
+        assert_eq!(s[ANTIGRAVITY_KEY]["PostToolUse"][0]["matcher"], "*");
+        assert!(s[ANTIGRAVITY_KEY]["Stop"][0]["command"].as_str().unwrap().starts_with("@\"C:/a/line-quota.exe\" --hook antigravity"));
+        // caminho novo (atualização do app): troca o comando
+        assert!(!apply_antigravity(&mut s, "D:/b/line-quota.exe").is_empty());
+        remove_antigravity(&mut s);
+        assert!(s.get(ANTIGRAVITY_KEY).is_none() && s["outro"]["Stop"][0]["command"] == "x");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

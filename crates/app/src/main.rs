@@ -19,20 +19,22 @@ fn config_path() -> PathBuf {
 }
 
 /// Quais agentes parecem instalados: pastas de dados do Claude Code, Codex e OpenCode.
-fn detect_installed() -> [bool; 4] {
+fn detect_installed() -> [bool; 5] {
     let home = PathBuf::from(std::env::var("USERPROFILE").or_else(|_| std::env::var("HOME")).unwrap_or_default());
     let opencode = std::env::var("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|_| home.join(".local").join("share")).join("opencode");
     let cursor = home.join(".cursor").is_dir() || PathBuf::from(std::env::var("APPDATA").unwrap_or_default()).join("Cursor").is_dir();
-    [home.join(".claude").is_dir(), home.join(".codex").is_dir(), opencode.is_dir(), cursor]
+    let antigravity = home.join(".gemini").join("antigravity").is_dir() || PathBuf::from(std::env::var("APPDATA").unwrap_or_default()).join("Antigravity").is_dir();
+    [home.join(".claude").is_dir(), home.join(".codex").is_dir(), opencode.is_dir(), cursor, antigravity]
 }
 
 /// Primeira execução: liga só os agentes encontrados (nenhum é obrigatório). Se não achar nenhum, mantém todos.
-fn apply_detected(c: &mut Config, found: [bool; 4]) {
+fn apply_detected(c: &mut Config, found: [bool; 5]) {
     if found.iter().any(|f| *f) {
         c.claude.enabled = found[0];
         c.codex.enabled = found[1];
         c.opencode.enabled = found[2];
         c.cursor.enabled = found[3];
+        c.antigravity.enabled = found[4];
     }
 }
 
@@ -58,6 +60,7 @@ fn providers() -> Vec<Box<dyn Provider>> {
         Box::new(lq_providers::codex::Codex),
         Box::new(lq_providers::opencode::OpenCode::new()),
         Box::new(lq_providers::cursor::Cursor::new(lq_activity::data_dir())),
+        Box::new(lq_providers::antigravity::Antigravity::new(lq_activity::data_dir())),
     ]
 }
 
@@ -88,11 +91,20 @@ fn cli(args: &[String]) -> bool {
     match args.first().map(String::as_str) {
         Some("--hook") => {
             let stdin = read_stdin();
-            if args.get(1).map(String::as_str) == Some("cursor") {
+            if args.get(1).map(String::as_str) == Some("antigravity") {
+                let _ = lq_activity::handle_antigravity_hook(&lq_activity::data_dir(), &stdin, now_secs());
+                print!("{{}}");
+            } else if args.get(1).map(String::as_str) == Some("cursor") {
                 // O Cursor lê a resposta do hook no stdout.
                 if let Ok(reply) = lq_activity::handle_cursor_hook(&lq_activity::data_dir(), &stdin, now_secs()) { print!("{reply}"); }
             } else {
                 let _ = lq_activity::handle_claude_hook(&lq_activity::data_dir(), &stdin, now_secs());
+            }
+            true
+        }
+        Some("--antigravity-usage") => {
+            match lq_providers::antigravity::Antigravity::new(lq_activity::data_dir()).fetch() {
+                Ok(u) => println!("{:?}", u.meters), Err(e) => println!("{e}"),
             }
             true
         }
@@ -162,6 +174,11 @@ mod demo {
             // Cursor: só atividade (sem limites); aparece quando ligado na config.
             ProviderRow { id: ProviderId::Cursor, result: Ok(Usage { provider: ProviderId::Cursor, meters: vec![] }),
                 activity: AgentState::Working, running: true, detail: None, chats: vec![] },
+            // Antigravity: duas cotas (Gemini e Claude); aparece quando ligado na config.
+            ProviderRow { id: ProviderId::Antigravity, result: Ok(Usage { provider: ProviderId::Antigravity, meters: vec![
+                    meter(MeterKind::Gemini, 35.0, 6 * 86400, now), meter(MeterKind::Claude, 41.0, 6 * 86400, now),
+                    meter(MeterKind::Claude5h, 68.0, 4 * 3600, now)] }),
+                activity: AgentState::Idle, running: true, detail: None, chats: vec![] },
         ]
     }
 }
@@ -187,7 +204,7 @@ fn main() {
     let shared = Shared::new(cfg, config_path(), std::sync::Arc::new(ClaudeAccount));
     let (tx, rx) = mpsc::channel::<()>();
     type Slot = Option<Result<lq_core::model::Usage, String>>;
-    let usage: Arc<Mutex<Vec<Slot>>> = Arc::new(Mutex::new(vec![None; 4]));
+    let usage: Arc<Mutex<Vec<Slot>>> = Arc::new(Mutex::new(vec![None; 5]));
 
     // Thread de rede: busca os limites no intervalo configurado ou sob pedido. Chamadas lentas
     // (até 10–15 s) ficam aqui e nunca seguram a atividade, os alertas nem a UI.
@@ -256,10 +273,10 @@ mod tests {
     #[test]
     fn first_run_enables_only_what_is_installed() {
         let mut c = Config::default();
-        apply_detected(&mut c, [false, true, false, false]);
-        assert_eq!((c.claude.enabled, c.codex.enabled, c.opencode.enabled, c.cursor.enabled), (false, true, false, false));
+        apply_detected(&mut c, [false, true, false, false, false]);
+        assert_eq!((c.claude.enabled, c.codex.enabled, c.opencode.enabled, c.cursor.enabled, c.antigravity.enabled), (false, true, false, false, false));
         let mut c = Config::default();
-        apply_detected(&mut c, [false, false, false, false]); // nada encontrado: não deixa o widget vazio
-        assert!(c.claude.enabled && c.codex.enabled && c.opencode.enabled && !c.cursor.enabled); // Cursor só liga se for encontrado
+        apply_detected(&mut c, [false, false, false, false, false]); // nada encontrado: não deixa o widget vazio
+        assert!(c.claude.enabled && c.codex.enabled && c.opencode.enabled && !c.cursor.enabled && !c.antigravity.enabled); // Cursor e Antigravity só ligam se forem encontrados
     }
 }

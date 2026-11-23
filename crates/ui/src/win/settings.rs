@@ -110,14 +110,16 @@ pub(super) unsafe fn open(tile: HWND) {
     // Coluna direita: provedores, conta, posição, sistema.
     let (rx, rw) = (324, 312);
     group(h, "Provedores", rx, 8, rw, 170);
-    check(h, "Claude Code", rx + 12, 26, 285, ID_PROVIDER);
-    check(h, "Codex", rx + 12, 48, 285, ID_PROVIDER + 1);
-    check(h, "OpenCode", rx + 12, 70, 285, ID_PROVIDER + 2);
-    check(h, "Cursor", rx + 12, 92, 62, ID_PROVIDER + 3);
-    push(h, "Colar cookie (limite)", rx + 80, 90, 150, ID_CURSOR_PASTE);
-    push(h, "Limpar", rx + 236, 90, 64, ID_CURSOR_CLEAR);
-    check(h, "Modo automático (só o que está aberto)", rx + 12, 120, 285, ID_AUTO);
-    check(h, "Ocultar o widget se nada estiver aberto", rx + 28, 142, 270, ID_AUTO_HIDE);
+    check(h, "Claude Code", rx + 12, 26, 130, ID_PROVIDER);
+    check(h, "Codex", rx + 150, 26, 140, ID_PROVIDER + 1);
+    check(h, "OpenCode", rx + 12, 48, 130, ID_PROVIDER + 2);
+    check(h, "Antigravity", rx + 150, 48, 140, ID_PROVIDER + 4);
+    check(h, "Cursor", rx + 12, 70, 62, ID_PROVIDER + 3);
+    push(h, "Colar cookie (limite)", rx + 80, 68, 150, ID_CURSOR_PASTE);
+    push(h, "Limpar", rx + 236, 68, 64, ID_CURSOR_CLEAR);
+    push(h, "Cotas do Antigravity  ▾", rx + 12, 96, 288, ID_AG_MENU);
+    check(h, "Modo automático (só o que está aberto)", rx + 12, 126, 285, ID_AUTO);
+    check(h, "Ocultar o widget se nada estiver aberto", rx + 28, 148, 270, ID_AUTO_HIDE);
 
     group(h, "Conta Claude", rx, 186, rw, 104);
     mk(h, w!("STATIC"), "", 0, (rx + 12, 206, rw - 24, 18), ID_STATUS);
@@ -177,7 +179,7 @@ unsafe fn sync(h: HWND) {
         (ID_SHOW_5H, cfg.claude.show_five_hour), (ID_SHOW_WEEK, cfg.claude.show_weekly), (ID_TAGS, u.show_tags), (ID_LOCK, u.locked), (ID_SHOW_ACTIVITY, cfg.claude.show_activity),
         (ID_ALERT_ENABLED, a.enabled), (ID_ALERT_TOAST, a.toast), (ID_ALERT_SOUND, a.sound),
         (ID_ALERT_RESET, a.notify_reset), (ID_ALERT_DONE, a.notify_task_done), (ID_ALERT_INPUT, a.notify_needs_input),
-        (ID_PROVIDER, cfg.claude.enabled), (ID_PROVIDER + 1, cfg.codex.enabled), (ID_PROVIDER + 2, cfg.opencode.enabled), (ID_PROVIDER + 3, cfg.cursor.enabled),
+        (ID_PROVIDER, cfg.claude.enabled), (ID_PROVIDER + 1, cfg.codex.enabled), (ID_PROVIDER + 2, cfg.opencode.enabled), (ID_PROVIDER + 3, cfg.cursor.enabled), (ID_PROVIDER + 4, cfg.antigravity.enabled),
         (ID_AUTO, u.auto_mode), (ID_AUTO_HIDE, u.auto_hide_when_none),
         (ID_AUTOSTART, autostart_enabled()),
     ] { set_check(h, id, on); }
@@ -202,12 +204,34 @@ unsafe fn sync(h: HWND) {
     if let Ok(s) = GetDlgItem(h, ID_CURSOR_PASTE as i32) { let _ = SetWindowTextW(s, PCWSTR(wide0(cursor_txt).as_ptr())); }
 }
 
+/// Menu de cotas do Antigravity (marcas): escolhe quais mostrar e se vão juntas num gráfico só.
+unsafe fn antigravity_menu(parent: HWND, button: HWND, tile: HWND) {
+    let Some(ctx) = CTX.get() else { return };
+    let v = ctx.shared.config.lock().unwrap().antigravity_view.clone();
+    let Ok(menu) = CreatePopupMenu() else { return };
+    let item = |id: usize, text: &str, on: bool| {
+        let flags = MF_STRING | if on { MF_CHECKED } else { MF_UNCHECKED };
+        let _ = AppendMenuW(menu, flags, id, PCWSTR(wide0(text).as_ptr()));
+    };
+    item(ID_AG_GEMINI, "Gemini (semanal)", v.gemini);
+    item(ID_AG_CLAUDE_WEEKLY, "Claude e GPT (semanal)", v.claude_weekly);
+    item(ID_AG_CLAUDE_5H, "Claude e GPT (5 horas)", v.claude_5h);
+    let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+    item(ID_AG_COMBINED, "Juntar num gráfico só", v.combined);
+    let mut r = RECT::default();
+    let _ = GetWindowRect(button, &mut r);
+    let cmd = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, r.left, r.bottom, 0, parent, None).0 as usize;
+    let _ = DestroyMenu(menu);
+    if cmd != 0 { SendMessageW(tile, WM_COMMAND, WPARAM(cmd), LPARAM(0)); sync(parent); }
+}
+
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match msg {
         WM_COMMAND => {
             let (id, code) = (wp.0 & 0xFFFF, (wp.0 >> 16) & 0xFFFF);
             let tile = CTX.get().map(|c| HWND(c.shared.hwnd.load(Ordering::Relaxed) as *mut _)).unwrap_or_default();
             if id == ID_CLOSE { let _ = DestroyWindow(hwnd); return LRESULT(0); }
+            if id == ID_AG_MENU && code == 0 { antigravity_menu(hwnd, HWND(lp.0 as *mut _), tile); return LRESULT(0); }
             let cmd = if COMBOS.contains(&id) {
                 if code != 1 { return LRESULT(0); } // só CBN_SELCHANGE
                 let sel = SendMessageW(HWND(lp.0 as *mut _), CB_GETCURSEL, WPARAM(0), LPARAM(0)).0;

@@ -145,6 +145,21 @@ pub struct AccountConfig {
     pub claude_full_scope: bool,
 }
 
+/// Antigravity tem três cotas: Gemini (semanal) e Claude/GPT (semanal e de 5 horas).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct AntigravityView {
+    pub gemini: bool,
+    pub claude_weekly: bool,
+    pub claude_5h: bool,
+    /// true: um gráfico só (anéis concêntricos, barras juntas); false: cada cota separada, como nos outros provedores.
+    pub combined: bool,
+}
+
+impl Default for AntigravityView {
+    fn default() -> Self { Self { gemini: true, claude_weekly: true, claude_5h: true, combined: true } }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Config {
@@ -154,15 +169,20 @@ pub struct Config {
     pub opencode: ProviderConfig,
     /// Cursor: só atividade (sem limites); desligado até o usuário ligar ou o app o encontrar instalado.
     pub cursor: ProviderConfig,
+    /// Antigravity: só atividade (sem limites); desligado até o usuário ligar ou o app o encontrar instalado.
+    pub antigravity: ProviderConfig,
+    /// Antigravity: quais cotas mostrar e se vão juntas num gráfico só.
+    pub antigravity_view: AntigravityView,
     pub alerts: AlertConfig,
     pub ui: UiConfig,
 }
 
-const PROCESS_DEFAULTS: [(ProviderId, &[&str]); 4] = [
+const PROCESS_DEFAULTS: [(ProviderId, &[&str]); 5] = [
     (ProviderId::Claude, &["claude.exe"]),
     (ProviderId::Codex, &["codex.exe"]),
     (ProviderId::OpenCode, &["opencode.exe", "opencode-cli.exe"]),
     (ProviderId::Cursor, &["cursor.exe"]),
+    (ProviderId::Antigravity, &["antigravity.exe"]),
 ];
 
 impl Default for Config {
@@ -170,6 +190,7 @@ impl Default for Config {
         let mut c = Self {
             account: AccountConfig::default(), claude: ProviderConfig::default(), codex: ProviderConfig::default(),
             opencode: ProviderConfig::default(), cursor: ProviderConfig { enabled: false, ..Default::default() },
+            antigravity: ProviderConfig { enabled: false, ..Default::default() }, antigravity_view: AntigravityView::default(),
             alerts: AlertConfig::default(), ui: UiConfig::default(),
         };
         c.fill_defaults();
@@ -184,10 +205,11 @@ impl Config {
             ProviderId::Codex => &self.codex,
             ProviderId::OpenCode => &self.opencode,
             ProviderId::Cursor => &self.cursor,
+            ProviderId::Antigravity => &self.antigravity,
         }
     }
 
-    pub fn providers_mut(&mut self) -> [&mut ProviderConfig; 4] { [&mut self.claude, &mut self.codex, &mut self.opencode, &mut self.cursor] }
+    pub fn providers_mut(&mut self) -> [&mut ProviderConfig; 5] { [&mut self.claude, &mut self.codex, &mut self.opencode, &mut self.cursor, &mut self.antigravity] }
 
     /// Preenche os nomes de processo padrão quando o arquivo de config antigo não os tem.
     pub fn fill_defaults(&mut self) {
@@ -197,6 +219,7 @@ impl Config {
                 ProviderId::Codex => &mut self.codex,
                 ProviderId::OpenCode => &mut self.opencode,
                 ProviderId::Cursor => &mut self.cursor,
+                ProviderId::Antigravity => &mut self.antigravity,
             };
             if p.processes.is_empty() { p.processes = names.iter().map(|s| s.to_string()).collect(); }
         }

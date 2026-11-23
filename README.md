@@ -4,16 +4,16 @@
 
 # Line Quota
 
-**Os limites do Claude Code, Codex e OpenCode sempre à vista, na barra de tarefas do Windows.**
+**Os limites do Claude Code, Codex, OpenCode e Antigravity sempre à vista, na barra de tarefas do Windows.**
 
 ![Windows](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white)
 ![Rust](https://img.shields.io/badge/Rust-nativo-DEA584?logo=rust&logoColor=white)
 ![Licença](https://img.shields.io/badge/licen%C3%A7a-MIT-3FB950)
 ![Tamanho](https://img.shields.io/badge/execut%C3%A1vel-2%2C9%20MB-8957E5)
 ![Memória](https://img.shields.io/badge/mem%C3%B3ria-~21%20MB-F2CC60)
-![Testes](https://img.shields.io/badge/testes-103%20passando-3FB950)
+![Testes](https://img.shields.io/badge/testes-110%20passando-3FB950)
 
-<img src="docs/images/widget-styles.png" alt="Os quatro formatos de gráfico do widget: barra horizontal, vertical, círculo e blocos" width="720">
+<img src="docs/images/widget-styles.png" alt="Os quatro formatos de gráfico do widget: barra horizontal, vertical, círculo e blocos (o Antigravity no fim de cada linha)" width="720">
 
 <sub>O widget em quatro formatos: barra horizontal, vertical, círculo e blocos (a última linha, sem rótulos nem números).</sub>
 
@@ -34,6 +34,7 @@ abrir, sem Electron: é um executável nativo de **2,9 MB**.
 | 🔔 **Avisos úteis** | Notificações do Windows ao passar de 80/90/95%, quando o limite renova, quando uma tarefa termina ou precisa de você. |
 | 🎨 **Do seu jeito** | Barra horizontal, vertical, círculo ou blocos; com ou sem número; com ou sem rótulos; ícone, texto ou nada; fundo transparente; qualquer fonte. |
 | 🪄 **Modo automático** | Mostra só o que está aberto e some quando nada está rodando. |
+| 🌌 **Antigravity (experimental)** | Mostra a atividade (ponto verde) pelos hooks oficiais dele (`~/.gemini/config/hooks.json`) e as **cotas** (Gemini semanal; Claude e GPT em 5 h e semanal, como na tela de uso dele), num gráfico triplo: três barras lado a lado (ou blocos em fileiras) e, no círculo, três anéis concêntricos: o maior é o Gemini, o do meio o Claude/GPT semanal e o menor o Claude/GPT de 5 h (cada anel num tom de verde). Em *Cotas do Antigravity* você escolhe quais mostrar e se ficam juntas ou separadas, em qualquer formato de gráfico: barras lado a lado e, no círculo, um anel dentro do outro. As cotas vêm do servidor local do próprio Antigravity (só `127.0.0.1`). Fica desligado até você ligar em *Configurações → Provedores* (ou ser encontrado na primeira execução). |
 | 🧩 **Cursor (experimental)** | Mostra se o Cursor está trabalhando, pelos hooks oficiais dele. O **limite mensal** do plano aparece se você colar o cookie `WorkosCursorSessionToken` do painel (*Configurações → Provedores → Colar cookie*: abre o painel do Cursor, mostra o passo a passo com uma contagem de 3 minutos e detecta o cookie assim que você o copia); o Cursor não tem API oficial de uso nem login para apps de terceiros. Fica desligado até você ligar (ou ser encontrado na primeira execução). |
 | 🔒 **Fica onde você pôs** | A posição vem travada: um clique sem querer não move o widget. |
 
@@ -59,7 +60,7 @@ abrir, sem Electron: é um executável nativo de **2,9 MB**.
 
 - **Atualizar é o mesmo caminho:** rode o instalador novo por cima. Ele mostra *"Atualizar da versão X para Y"*, troca o programa e mantém suas configurações.
 - **Sem administrador.** Instala em `%LOCALAPPDATA%\Programs\LineQuota`.
-- **Nenhum agente é obrigatório.** Na primeira execução só ficam ligados os que existem no computador; os hooks do Claude Code e do Cursor só são configurados se eles estiverem instalados, mesclados com os seus (com backup de `settings.json` e `hooks.json`). Se instalar o Cursor depois, rode o instalador de novo para configurar o hook dele.
+- **Nenhum agente é obrigatório.** Na primeira execução só ficam ligados os que existem no computador; os hooks do Claude Code, do Cursor e do Antigravity só são configurados se eles estiverem instalados, mesclados com os seus (com backup de `settings.json` e `hooks.json`). Se instalar o Cursor ou o Antigravity depois, rode o instalador de novo para configurar o hook dele.
 - **Desinstalar:** *Configurações do Windows → Aplicativos instalados → Line Quota*. O desinstalador pergunta se deve apagar também as configurações (**purge**).
 
 > **Aviso do SmartScreen:** o executável ainda não é assinado digitalmente, então o Windows pode mostrar "O Windows protegeu seu PC".
@@ -75,9 +76,9 @@ Para scripts: `LineQuota-Setup.exe` abre a janela; o programa instalado aceita
 | Executável do app | **2,9 MB** (instalador: 3,2 MB, com o app dentro) |
 | Memória em uso | **~21 MB** (set de trabalho), 7 MB privados |
 | CPU parado | **~1%** de um núcleo (leitura local a cada 2 s; rede em outra thread) |
-| Código | **~6 mil linhas** de Rust em 6 crates, **103 testes** automatizados |
+| Código | **~6 mil linhas** de Rust em 6 crates, **110 testes** automatizados |
 | Dependências nativas | Win32 puro (GDI, sem frameworks de interface) |
-| Chamadas de rede | Só `api.anthropic.com` (uso do Claude), `chatgpt.com` (uso do Codex) e `cursor.com` (uso do Cursor, só se você colar o cookie); sem telemetria |
+| Chamadas de rede | Só `api.anthropic.com` (uso do Claude), `chatgpt.com` (uso do Codex) e `cursor.com` (uso do Cursor, só se você colar o cookie); o Antigravity é lido só localmente (`127.0.0.1`); sem telemetria |
 
 ## Como funciona
 
@@ -88,6 +89,8 @@ flowchart LR
         CX[Codex] -- sessões .jsonl --> PRV
         OC[OpenCode] -- banco SQLite --> PRV
         CU[Cursor] -- hooks --> ACT
+        AG[Antigravity] -- hooks e servidor local --> ACT
+        AG -- cotas --> PRV
     end
     ACT[atividade<br/>quem trabalha agora] --> APP
     PRV[provedores<br/>limites e chats] --> APP
@@ -96,8 +99,8 @@ flowchart LR
     APP --> N[alertas e notificações]
 ```
 
-Cada crate faz uma coisa: `core` (modelos, config e alertas), `activity` (hooks do Claude e do Cursor, e processos abertos),
-`providers` (Claude, Codex, OpenCode, Cursor), `ui` (desenho e configurações), `app` (orquestração e instalação) e `installer`
+Cada crate faz uma coisa: `core` (modelos, config e alertas), `activity` (hooks do Claude, do Cursor e do Antigravity, e processos abertos),
+`providers` (Claude, Codex, OpenCode, Cursor, Antigravity), `ui` (desenho e configurações), `app` (orquestração e instalação) e `installer`
 (esta janela de instalação, com o app embutido).
 
 ## Privacidade e segurança
@@ -106,6 +109,7 @@ Cada crate faz uma coisa: `core` (modelos, config e alertas), `activity` (hooks 
 - O token do Codex só é enviado a endereços **HTTPS** (ou `localhost`); a URL do `config.toml` é validada.
 - O hook que o Claude Code chama só lê arquivos `.jsonl` dentro da pasta do próprio Claude e sanitiza o nome dos arquivos que grava.
 - O hook do Cursor (`~/.cursor/hooks.json`) nunca bloqueia nada: responde sempre que pode seguir e só grava o estado (trabalhando/ocioso), o projeto e o último pedido, localmente.
+- O hook do Antigravity também nunca bloqueia nada. Para as cotas, o app lê o arquivo de porta que o próprio Antigravity publica e consulta só `127.0.0.1`; o token desse arquivo nunca é gravado, mostrado nem enviado a outro endereço.
 - Seu `settings.json` nunca é sobrescrito se não puder ser lido; o backup do original é feito uma única vez.
 - O cookie do Cursor, se colado, fica criptografado com DPAPI (só o seu usuário do Windows abre), nunca aparece em tela, log ou configuração e só é enviado a `cursor.com` (sem seguir redirecionamentos). A área de transferência é limpa assim que ele é capturado; *Limpar* e a desinstalação o apagam. O histórico da área de transferência do Windows (Win+V), se ligado, pode guardar a cópia feita no navegador: apague o item ali.
 - Nada sai do computador além das consultas de uso acima.

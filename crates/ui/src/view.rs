@@ -15,6 +15,8 @@ pub enum Seg {
     Dot(Level, bool),
     /// Gráfico de progresso: preenchimento de 0.0 a 1.0, cor e formato.
     Bar(f32, Level, BarStyle),
+    /// Vários gráficos juntos (Antigravity: Gemini, Claude semanal, Claude 5 h): lado a lado, ou anéis concêntricos.
+    Multi(Vec<(f32, Level)>, BarStyle),
 }
 
 #[derive(Clone, PartialEq)]
@@ -29,7 +31,7 @@ pub struct ProviderRow {
 }
 
 pub fn label(id: ProviderId) -> &'static str {
-    match id { ProviderId::Claude => "Cl", ProviderId::Codex => "Cx", ProviderId::OpenCode => "OC", ProviderId::Cursor => "Cu" }
+    match id { ProviderId::Claude => "Cl", ProviderId::Codex => "Cx", ProviderId::OpenCode => "OC", ProviderId::Cursor => "Cu", ProviderId::Antigravity => "Ag" }
 }
 
 pub fn level(used: f32) -> Level {
@@ -70,11 +72,12 @@ pub fn segments(rows: &[ProviderRow], cfg: &Config) -> Vec<Seg> {
         }
         match &row.result {
             Err(_) => out.push(text("!", Level::Crit)),
-            Ok(u) if u.meters.is_empty() && matches!(row.id, ProviderId::OpenCode | ProviderId::Cursor) => {
+            Ok(u) if u.meters.is_empty() && matches!(row.id, ProviderId::OpenCode | ProviderId::Cursor | ProviderId::Antigravity) => {
                 // Sem limite a medir (OpenCode sem plano pago, Cursor): fica só o ícone (sem o espaço sobrando).
                 if matches!(out.last(), Some(Seg::Text(t, _)) if t == " ") { out.pop(); }
                 if cfg.ui.labels == LabelStyle::None { out.push(text(label(row.id), Level::Dim)); } // senão a linha ficaria vazia
             }
+            Ok(u) if row.id == ProviderId::Antigravity => antigravity_segs(u, cfg, &mut out),
             Ok(u) => {
                 let mut first = true;
                 for (kind, show, tag) in [(MeterKind::FiveHour, pc.show_five_hour, "5h"), (MeterKind::Weekly, pc.show_weekly, "7d"), (MeterKind::Monthly, true, "30d")] {
@@ -101,6 +104,40 @@ pub fn segments(rows: &[ProviderRow], cfg: &Config) -> Vec<Seg> {
     out
 }
 
+/// Antigravity: as cotas escolhidas (Gemini; Claude semanal; Claude 5 h), juntas num gráfico só ou separadas.
+/// Juntas, o maior/mais externo é o Gemini, depois o Claude semanal e, por dentro, o Claude de 5 horas.
+fn antigravity_segs(u: &Usage, cfg: &Config, out: &mut Vec<Seg>) {
+    let av = &cfg.antigravity_view;
+    let shown: Vec<(&'static str, f32, f32)> = [("Gm", MeterKind::Gemini, av.gemini), ("Cl 7d", MeterKind::Claude, av.claude_weekly), ("Cl 5h", MeterKind::Claude5h, av.claude_5h)].into_iter()
+        .filter(|(_, _, on)| *on)
+        .filter_map(|(tag, k, _)| u.meter(k).map(|m| (tag, if cfg.ui.show_remaining { m.remaining_pct() } else { m.used_pct }, m.used_pct))).collect();
+    if shown.is_empty() { return; }
+    let (bars, nums) = (matches!(cfg.ui.display, DisplayMode::Bar | DisplayMode::Both), matches!(cfg.ui.display, DisplayMode::Number | DisplayMode::Both));
+    if av.combined && shown.len() > 1 {
+        if bars { out.push(Seg::Multi(shown.iter().map(|s| (s.1 / 100.0, level(s.2))).collect(), cfg.ui.bar_style)); }
+        if nums {
+            if bars { out.push(text(" ", Level::Dim)); }
+            for (i, (tag, v, used)) in shown.iter().enumerate() {
+                if i > 0 { out.push(text(" ", Level::Dim)); }
+                if cfg.ui.show_tags { out.push(text(format!("{tag} "), Level::Dim)); }
+                out.push(text(format!("{v:.0}%"), level(*used)));
+            }
+        }
+    } else {
+        // Separadas: cada cota com o seu gráfico (qualquer formato), como Claude e Codex.
+        for (i, (tag, v, used)) in shown.iter().enumerate() {
+            if i > 0 { out.push(text("  ", Level::Dim)); }
+            if cfg.ui.show_tags { out.push(text(format!("{tag} "), Level::Dim)); }
+            let lvl = level(*used);
+            if bars { out.push(Seg::Bar(v / 100.0, lvl, cfg.ui.bar_style)); }
+            if nums {
+                if bars { out.push(text(" ", Level::Dim)); }
+                out.push(text(format!("{v:.0}%"), lvl));
+            }
+        }
+    }
+}
+
 pub fn tooltip(rows: &[ProviderRow], cfg: &Config) -> String {
     let mut s = String::new();
     for r in rows.iter().filter(|r| cfg.provider(r.id).enabled) {
@@ -110,7 +147,7 @@ pub fn tooltip(rows: &[ProviderRow], cfg: &Config) -> String {
             Ok(u) => {
                 s.push_str(label(r.id));
                 for m in &u.meters {
-                    let tag = match m.kind { MeterKind::FiveHour => "5h", MeterKind::Weekly => "7d", MeterKind::Monthly => "30d" };
+                    let tag = match m.kind { MeterKind::FiveHour => "5h", MeterKind::Weekly => "7d", MeterKind::Monthly => "30d", MeterKind::Claude => "Claude", MeterKind::Claude5h => "Claude 5h", MeterKind::Gemini => "Gemini" };
                     s.push_str(&format!(" {tag} {:.0}%", m.used_pct));
                 }
             }
@@ -122,7 +159,7 @@ pub fn tooltip(rows: &[ProviderRow], cfg: &Config) -> String {
 
 
 pub fn full_name(id: ProviderId) -> &'static str {
-    match id { ProviderId::Claude => "Claude Code", ProviderId::Codex => "Codex", ProviderId::OpenCode => "OpenCode", ProviderId::Cursor => "Cursor" }
+    match id { ProviderId::Claude => "Claude Code", ProviderId::Codex => "Codex", ProviderId::OpenCode => "OpenCode", ProviderId::Cursor => "Cursor", ProviderId::Antigravity => "Antigravity" }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -197,7 +234,7 @@ pub fn limit_lines(row: &ProviderRow, now: i64) -> Vec<FlyLine> {
         Err(e) => v.push(fl(FlyKind::Body, "Limites", e.clone(), Level::Crit)),
         Ok(u) if u.meters.is_empty() => v.push(fl(FlyKind::Body, "Plano", "Gratuito ou por chave de API: sem limite de 5h/semanal para medir", Level::Dim)),
         Ok(u) => for m in &u.meters {
-            let tag = match m.kind { MeterKind::FiveHour => "5 horas", MeterKind::Weekly => "Semanal", MeterKind::Monthly => "Mensal" };
+            let tag = match m.kind { MeterKind::FiveHour => "5 horas", MeterKind::Weekly => "Semanal", MeterKind::Monthly => "Mensal", MeterKind::Claude => "Claude semanal", MeterKind::Claude5h => "Claude 5 horas", MeterKind::Gemini => "Gemini semanal" };
             let reset = m.resets_at.map(|r| format!(" · renova em {}", fmt_duration(r - now))).unwrap_or_default();
             let est = if m.estimated { "~" } else { "" };
             v.push(fl(FlyKind::Body, tag, format!("{est}{:.0}% usado{reset}", m.used_pct), level(m.used_pct)));
@@ -293,6 +330,7 @@ mod tests {
         s.iter().map(|x| match x {
             Seg::Text(t, _) => t.clone(),
             Seg::Icon(id) => format!("<{}>", label(*id)),
+            Seg::Multi(p, _) => format!("[{}]", p.iter().map(|x| format!("{:.0}", x.0 * 100.0)).collect::<Vec<_>>().join("|")),
             Seg::Dot(..) => "● ".to_string(),
             Seg::Bar(f, _, _) => format!("[{:.0}]", f * 100.0),
         }).collect()
@@ -571,5 +609,31 @@ mod window_tests {
         let v = flyout_tree(&r, &HashSet::new(), 100_000, 30);
         assert!(v.iter().any(|l| l.text.contains("Nenhum chat ativo nos últimos 30 min")));
         assert_eq!(fmt_window(120), "2 h");
+    }
+
+    #[test]
+    fn antigravity_limits_combined_or_separate_and_selectable() {
+        use lq_core::model::{Meter, MeterKind};
+        let m = |kind, used_pct| Meter { kind, used_pct, resets_at: None, estimated: false };
+        let row = ProviderRow { id: ProviderId::Antigravity, activity: AgentState::Idle, running: true, detail: None, chats: vec![],
+            result: Ok(Usage { provider: ProviderId::Antigravity, meters: vec![m(MeterKind::Gemini, 10.0), m(MeterKind::Claude, 40.0), m(MeterKind::Claude5h, 90.0)] }) };
+        let mut c = Config::default();
+        c.antigravity.enabled = true;
+        c.ui.display = DisplayMode::Bar;
+        c.ui.auto_mode = false;
+        let multi = |c: &Config| segments(&[row.clone()], c).into_iter().find_map(|s| if let Seg::Multi(p, _) = s { Some(p) } else { None });
+        let bars = |c: &Config| segments(&[row.clone()], c).iter().filter(|s| matches!(s, Seg::Bar(..))).count();
+        // juntas (padrão): um gráfico com as 3 cotas, na ordem Gemini, Claude semanal, Claude 5 h
+        let p = multi(&c).unwrap();
+        assert_eq!(p.iter().map(|x| x.1).collect::<Vec<_>>(), vec![Level::Normal, Level::Normal, Level::Crit]);
+        // sem o Gemini: só duas
+        c.antigravity_view.gemini = false;
+        assert_eq!(multi(&c).unwrap().len(), 2);
+        // separadas: um gráfico por cota escolhida
+        c.antigravity_view.combined = false;
+        assert!(multi(&c).is_none());
+        assert_eq!(bars(&c), 2);
+        c.antigravity_view.claude_weekly = false;
+        assert_eq!(bars(&c), 1);
     }
 }
