@@ -60,7 +60,7 @@ pub(super) unsafe fn open(tile: HWND) {
         CLIP_DEFAULT_PRECIS.0 as u32, CLEARTYPE_QUALITY.0 as u32, 0, w!("Segoe UI"));
     SET_FONT.store(f.0 as isize, Ordering::Relaxed);
 
-    let (cw, ch) = (scale(648), scale(600));
+    let (cw, ch) = (scale(648), scale(628));
     let mut rc = RECT { left: 0, top: 0, right: cw, bottom: ch };
     let style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
     let _ = AdjustWindowRectEx(&mut rc, style, false, WINDOW_EX_STYLE(0));
@@ -109,45 +109,46 @@ pub(super) unsafe fn open(tile: HWND) {
 
     // Coluna direita: provedores, conta, posição, sistema.
     let (rx, rw) = (324, 312);
-    group(h, "Provedores", rx, 8, rw, 170);
-    check(h, "Claude Code", rx + 12, 26, 130, ID_PROVIDER);
-    check(h, "Codex", rx + 150, 26, 140, ID_PROVIDER + 1);
-    check(h, "OpenCode", rx + 12, 48, 130, ID_PROVIDER + 2);
-    check(h, "Antigravity", rx + 150, 48, 140, ID_PROVIDER + 4);
-    check(h, "Cursor", rx + 12, 70, 62, ID_PROVIDER + 3);
-    push(h, "Colar cookie (limite)", rx + 80, 68, 150, ID_CURSOR_PASTE);
-    push(h, "Limpar", rx + 236, 68, 64, ID_CURSOR_CLEAR);
-    push(h, "Cotas do Antigravity  ▾", rx + 12, 96, 288, ID_AG_MENU);
-    check(h, "Modo automático (só o que está aberto)", rx + 12, 126, 285, ID_AUTO);
-    check(h, "Ocultar o widget se nada estiver aberto", rx + 28, 148, 270, ID_AUTO_HIDE);
+    // Um provedor por linha; o que é só dele (cookie do Cursor, cotas do Antigravity) fica à direita, na mesma linha.
+    group(h, "Provedores", rx, 8, rw, 198);
+    check(h, "Claude Code", rx + 12, 26, 285, ID_PROVIDER);
+    check(h, "Codex", rx + 12, 48, 285, ID_PROVIDER + 1);
+    check(h, "OpenCode", rx + 12, 70, 285, ID_PROVIDER + 2);
+    check(h, "Cursor", rx + 12, 96, 100, ID_PROVIDER + 3);
+    push(h, "Colar cookie", rx + 120, 94, 108, ID_CURSOR_PASTE);
+    push(h, "Limpar", rx + 234, 94, 66, ID_CURSOR_CLEAR);
+    check(h, "Antigravity", rx + 12, 124, 100, ID_PROVIDER + 4);
+    push(h, "Escolher cotas  ▾", rx + 120, 122, 180, ID_AG_MENU);
+    check(h, "Modo automático (só o que está aberto)", rx + 12, 158, 285, ID_AUTO);
+    check(h, "Ocultar o widget se nada estiver aberto", rx + 28, 180, 270, ID_AUTO_HIDE);
 
-    group(h, "Conta Claude", rx, 186, rw, 104);
-    mk(h, w!("STATIC"), "", 0, (rx + 12, 206, rw - 24, 18), ID_STATUS);
-    push(h, "Entrar (abre o navegador)", rx + 12, 228, 180, ID_CLAUDE_LOGIN);
-    push(h, "Colar código", rx + 200, 228, 100, ID_CLAUDE_PASTE);
-    push(h, "Sair da conta Claude", rx + 12, 258, 180, ID_CLAUDE_LOGOUT);
+    group(h, "Conta Claude", rx, 214, rw, 104);
+    mk(h, w!("STATIC"), "", 0, (rx + 12, 234, rw - 24, 18), ID_STATUS);
+    push(h, "Entrar (abre o navegador)", rx + 12, 256, 180, ID_CLAUDE_LOGIN);
+    push(h, "Colar código", rx + 200, 256, 100, ID_CLAUDE_PASTE);
+    push(h, "Sair da conta Claude", rx + 12, 286, 180, ID_CLAUDE_LOGOUT);
 
-    group(h, "Posição", rx, 298, rw, 116);
-    label(h, "Na barra", rx + 12, 316, 90);
-    combo(h, rx + 110, 316, 190, ID_ANCHOR, &["Ao lado da bandeja", "Início da barra", "Centro da barra", "Livre (arrastar)"]);
-    label(h, "Monitor", rx + 12, 344, 90);
-    let mc = combo(h, rx + 110, 344, 190, ID_MONITOR, &["Automático"]);
+    group(h, "Posição", rx, 326, rw, 116);
+    label(h, "Na barra", rx + 12, 344, 90);
+    combo(h, rx + 110, 344, 190, ID_ANCHOR, &["Ao lado da bandeja", "Início da barra", "Centro da barra", "Livre (arrastar)"]);
+    label(h, "Monitor", rx + 12, 372, 90);
+    let mc = combo(h, rx + 110, 372, 190, ID_MONITOR, &["Automático"]);
     for (i, m) in monitors().iter().enumerate() {
         let n = format!("Monitor {}{}", i + 1, if m.primary { " (principal)" } else { "" });
         SendMessageW(mc, CB_ADDSTRING, WPARAM(0), LPARAM(wide0(&n).as_ptr() as isize));
     }
-    check(h, "Travar a posição na barra", rx + 12, 378, 285, ID_LOCK);
+    check(h, "Travar a posição na barra", rx + 12, 406, 285, ID_LOCK);
 
-    group(h, "Sistema", rx, 422, rw, 128);
-    check(h, "Iniciar com o Windows", rx + 12, 440, 285, ID_AUTOSTART);
-    push(h, "Atualizar agora", rx + 12, 466, 140, ID_REFRESH);
-    push(h, "Abrir config.toml", rx + 160, 466, 140, ID_OPEN_CONFIG);
-    push(h, "Recarregar do arquivo", rx + 12, 496, 140, ID_RELOAD);
-    label(h, "Chats no painel: últimos", rx + 12, 522, 150);
+    group(h, "Sistema", rx, 450, rw, 128);
+    check(h, "Iniciar com o Windows", rx + 12, 468, 285, ID_AUTOSTART);
+    push(h, "Atualizar agora", rx + 12, 494, 140, ID_REFRESH);
+    push(h, "Abrir config.toml", rx + 160, 494, 140, ID_OPEN_CONFIG);
+    push(h, "Recarregar do arquivo", rx + 12, 524, 140, ID_RELOAD);
+    label(h, "Chats no painel: últimos", rx + 12, 550, 150);
     let wl: Vec<String> = CHAT_WINDOWS.iter().map(|m| crate::view::fmt_window(*m)).collect();
-    combo(h, rx + 170, 522, 120, ID_CHATWIN, &wl.iter().map(String::as_str).collect::<Vec<_>>());
+    combo(h, rx + 170, 550, 120, ID_CHATWIN, &wl.iter().map(String::as_str).collect::<Vec<_>>());
 
-    push(h, "Fechar", rx + rw - 100, 560, 100, ID_CLOSE);
+    push(h, "Fechar", rx + rw - 100, 588, 100, ID_CLOSE);
 
     apply_theme(h);
     sync(h);
@@ -200,7 +201,7 @@ unsafe fn sync(h: HWND) {
     }
     let status = if ctx.shared.account.logged_in() { "Claude: conectado" } else { "Claude: não conectado" };
     if let Ok(s) = GetDlgItem(h, ID_STATUS as i32) { let _ = SetWindowTextW(s, PCWSTR(wide0(status).as_ptr())); }
-    let cursor_txt = if ctx.shared.account.cursor_connected() { "Cookie salvo (trocar)" } else { "Colar cookie (limite)" };
+    let cursor_txt = if ctx.shared.account.cursor_connected() { "Trocar cookie" } else { "Colar cookie" };
     if let Ok(s) = GetDlgItem(h, ID_CURSOR_PASTE as i32) { let _ = SetWindowTextW(s, PCWSTR(wide0(cursor_txt).as_ptr())); }
 }
 

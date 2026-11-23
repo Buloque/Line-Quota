@@ -15,9 +15,14 @@ pub enum Seg {
     Dot(Level, bool),
     /// Gráfico de progresso: preenchimento de 0.0 a 1.0, cor e formato.
     Bar(f32, Level, BarStyle),
-    /// Vários gráficos juntos (Antigravity: Gemini, Claude semanal, Claude 5 h): lado a lado, ou anéis concêntricos.
-    Multi(Vec<(f32, Level)>, BarStyle),
+    /// Gráficos do Antigravity (Gemini, Claude semanal, Claude 5 h), cada um com o seu tom de verde: juntos, lado a
+    /// lado ou em anéis concêntricos; com um só item, é um gráfico comum.
+    Multi(Vec<(f32, Level, Tone)>, BarStyle),
 }
+
+/// Tom do gráfico: o de cima/maior mais escuro, o do meio normal e o de baixo/menor mais claro.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tone { Dark, Normal, Light }
 
 #[derive(Clone, PartialEq)]
 pub struct ProviderRow {
@@ -108,16 +113,17 @@ pub fn segments(rows: &[ProviderRow], cfg: &Config) -> Vec<Seg> {
 /// Juntas, o maior/mais externo é o Gemini, depois o Claude semanal e, por dentro, o Claude de 5 horas.
 fn antigravity_segs(u: &Usage, cfg: &Config, out: &mut Vec<Seg>) {
     let av = &cfg.antigravity_view;
-    let shown: Vec<(&'static str, f32, f32)> = [("Gm", MeterKind::Gemini, av.gemini), ("Cl 7d", MeterKind::Claude, av.claude_weekly), ("Cl 5h", MeterKind::Claude5h, av.claude_5h)].into_iter()
-        .filter(|(_, _, on)| *on)
-        .filter_map(|(tag, k, _)| u.meter(k).map(|m| (tag, if cfg.ui.show_remaining { m.remaining_pct() } else { m.used_pct }, m.used_pct))).collect();
+    // O tom é de cada cota (não da posição): Gemini escuro, Claude semanal normal, Claude 5 h claro.
+    let shown: Vec<(&'static str, f32, f32, Tone)> = [("Gm", MeterKind::Gemini, av.gemini, Tone::Dark), ("Cl 7d", MeterKind::Claude, av.claude_weekly, Tone::Normal), ("Cl 5h", MeterKind::Claude5h, av.claude_5h, Tone::Light)].into_iter()
+        .filter(|(_, _, on, _)| *on)
+        .filter_map(|(tag, k, _, tone)| u.meter(k).map(|m| (tag, if cfg.ui.show_remaining { m.remaining_pct() } else { m.used_pct }, m.used_pct, tone))).collect();
     if shown.is_empty() { return; }
     let (bars, nums) = (matches!(cfg.ui.display, DisplayMode::Bar | DisplayMode::Both), matches!(cfg.ui.display, DisplayMode::Number | DisplayMode::Both));
     if av.combined && shown.len() > 1 {
-        if bars { out.push(Seg::Multi(shown.iter().map(|s| (s.1 / 100.0, level(s.2))).collect(), cfg.ui.bar_style)); }
+        if bars { out.push(Seg::Multi(shown.iter().map(|s| (s.1 / 100.0, level(s.2), s.3)).collect(), cfg.ui.bar_style)); }
         if nums {
             if bars { out.push(text(" ", Level::Dim)); }
-            for (i, (tag, v, used)) in shown.iter().enumerate() {
+            for (i, (tag, v, used, _)) in shown.iter().enumerate() {
                 if i > 0 { out.push(text(" ", Level::Dim)); }
                 if cfg.ui.show_tags { out.push(text(format!("{tag} "), Level::Dim)); }
                 out.push(text(format!("{v:.0}%"), level(*used)));
@@ -125,11 +131,11 @@ fn antigravity_segs(u: &Usage, cfg: &Config, out: &mut Vec<Seg>) {
         }
     } else {
         // Separadas: cada cota com o seu gráfico (qualquer formato), como Claude e Codex.
-        for (i, (tag, v, used)) in shown.iter().enumerate() {
+        for (i, (tag, v, used, tone)) in shown.iter().enumerate() {
             if i > 0 { out.push(text("  ", Level::Dim)); }
             if cfg.ui.show_tags { out.push(text(format!("{tag} "), Level::Dim)); }
             let lvl = level(*used);
-            if bars { out.push(Seg::Bar(v / 100.0, lvl, cfg.ui.bar_style)); }
+            if bars { out.push(Seg::Multi(vec![(v / 100.0, lvl, *tone)], cfg.ui.bar_style)); }
             if nums {
                 if bars { out.push(text(" ", Level::Dim)); }
                 out.push(text(format!("{v:.0}%"), lvl));
@@ -621,11 +627,12 @@ mod window_tests {
         c.antigravity.enabled = true;
         c.ui.display = DisplayMode::Bar;
         c.ui.auto_mode = false;
-        let multi = |c: &Config| segments(&[row.clone()], c).into_iter().find_map(|s| if let Seg::Multi(p, _) = s { Some(p) } else { None });
-        let bars = |c: &Config| segments(&[row.clone()], c).iter().filter(|s| matches!(s, Seg::Bar(..))).count();
+        let multi = |c: &Config| segments(&[row.clone()], c).into_iter().find_map(|s| if let Seg::Multi(p, _) = s { Some(p).filter(|p| p.len() > 1) } else { None });
+        let bars = |c: &Config| segments(&[row.clone()], c).iter().filter(|s| matches!(s, Seg::Multi(p, _) if p.len() == 1)).count();
         // juntas (padrão): um gráfico com as 3 cotas, na ordem Gemini, Claude semanal, Claude 5 h
         let p = multi(&c).unwrap();
         assert_eq!(p.iter().map(|x| x.1).collect::<Vec<_>>(), vec![Level::Normal, Level::Normal, Level::Crit]);
+        assert_eq!(p.iter().map(|x| x.2).collect::<Vec<_>>(), vec![Tone::Dark, Tone::Normal, Tone::Light]);
         // sem o Gemini: só duas
         c.antigravity_view.gemini = false;
         assert_eq!(multi(&c).unwrap().len(), 2);

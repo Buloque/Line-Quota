@@ -3,7 +3,7 @@
 //! (fundo preto e branco) e o alpha real de cada pixel sai da diferença: texto e ícones ficam
 //! suaves e o resto é transparente, sem franjas de cor.
 use crate::layout::{offset_of, place_on_bar, place_tile, Rect};
-use crate::view::{flyout_tree, segments, should_hide, tooltip, visible_ids, FlyKind, Level, ProviderRow, Seg};
+use crate::view::{flyout_tree, segments, should_hide, tooltip, visible_ids, FlyKind, Level, ProviderRow, Seg, Tone};
 use lq_core::config::{ActivityStyle, Anchor, BarStyle, Config, DisplayMode, LabelStyle};
 use lq_core::model::ProviderId;
 use lq_core::notify::{Notification, Severity};
@@ -480,6 +480,7 @@ fn mix_color(c: COLORREF, target: u32, pct: u32) -> COLORREF {
 /// Gráfico múltiplo (Antigravity, 2 ou 3 valores): barras lado a lado; no círculo, anéis concêntricos
 /// (o primeiro é o maior). Tamanho (largura, altura).
 fn multi_size(style: BarStyle, n: usize) -> (i32, i32) {
+    if n == 1 { return gauge_size(style); }
     let n = n.clamp(2, 3) as i32;
     match style {
         BarStyle::Horizontal => { let bw = (bar_w() * if n == 3 { 5 } else { 7 } / 10).max(7); (bw * n + scale(3) * (n - 1), bar_h()) }
@@ -489,34 +490,38 @@ fn multi_size(style: BarStyle, n: usize) -> (i32, i32) {
     }
 }
 
-unsafe fn draw_multi(hdc: HDC, x: i32, height: i32, parts: &[(f32, COLORREF)], style: BarStyle, light: bool) {
+unsafe fn draw_multi(hdc: HDC, x: i32, height: i32, parts: &[(f32, COLORREF, Tone)], style: BarStyle, light: bool) {
+    // Tom de cada gráfico: o de cima/maior mais escuro, o do meio normal e o de baixo/menor mais claro.
+    let tone = |c: COLORREF, t: Tone| match t { Tone::Dark => mix_color(c, 0x000000, 38), Tone::Normal => c, Tone::Light => mix_color(c, 0xFFFFFF, 42) };
     let n = parts.len() as i32;
     let (pw, ph) = multi_size(style, parts.len());
     let top = (height - ph) / 2;
+    if n == 1 {
+        draw_gauge(hdc, x, height, parts[0].0.clamp(0.0, 1.0), tone(parts[0].1, parts[0].2), style, light);
+        return;
+    }
     match style {
         BarStyle::Horizontal | BarStyle::Vertical => {
             let gap = if style == BarStyle::Horizontal { scale(3) } else { scale(2) };
             let w1 = (pw - gap * (n - 1)) / n;
-            for (i, (f, c)) in parts.iter().enumerate() {
-                draw_gauge_rect(hdc, x + i as i32 * (w1 + gap), top, w1, ph, f.clamp(0.0, 1.0), *c, style, light, 2);
+            for (i, (f, c, t)) in parts.iter().enumerate() {
+                draw_gauge_rect(hdc, x + i as i32 * (w1 + gap), top, w1, ph, f.clamp(0.0, 1.0), tone(*c, *t), style, light, 2);
             }
         }
         BarStyle::Blocks => {
             let gap = scale(1).max(1);
             let rh = (ph - gap * (n - 1)) / n;
-            for (i, (f, c)) in parts.iter().enumerate() {
-                draw_gauge_rect(hdc, x, top + i as i32 * (rh + gap), pw, rh, f.clamp(0.0, 1.0), *c, style, light, 2);
+            for (i, (f, c, t)) in parts.iter().enumerate() {
+                draw_gauge_rect(hdc, x, top + i as i32 * (rh + gap), pw, rh, f.clamp(0.0, 1.0), tone(*c, *t), style, light, 2);
             }
         }
         BarStyle::Ring => {
             // Anéis concêntricos: cada um afastado do anterior pela espessura + 1 px.
             let t = (pw / (2 * n + 2)).max(2);
             let step = t + scale(1).max(1);
-            for (i, (f, c)) in parts.iter().enumerate() {
+            for (i, (f, c, tn)) in parts.iter().enumerate() {
                 let inset = i as i32 * step;
-                // Cada anel num tom: o maior mais escuro, o do meio normal e o menor mais claro.
-                let tone = if i == 0 { mix_color(*c, 0x000000, 38) } else if i + 1 == parts.len() { mix_color(*c, 0xFFFFFF, 42) } else { *c };
-                draw_gauge_rect(hdc, x + inset, top + inset, pw - 2 * inset, ph - 2 * inset, f.clamp(0.0, 1.0), tone, style, light, t);
+                draw_gauge_rect(hdc, x + inset, top + inset, pw - 2 * inset, ph - 2 * inset, f.clamp(0.0, 1.0), tone(*c, *tn), style, light, t);
             }
         }
     }
@@ -615,7 +620,7 @@ unsafe fn run_items(hdc: HDC, segs: &[Seg], origin_x: i32, height: i32, draw: bo
             Seg::Multi(parts, style) => {
                 let (pw, _) = multi_size(*style, parts.len());
                 if draw {
-                    let cols: Vec<(f32, COLORREF)> = parts.iter().map(|(f, l)| (*f, bar_color(*l, light))).collect();
+                    let cols: Vec<(f32, COLORREF, Tone)> = parts.iter().map(|(f, l, t)| (*f, bar_color(*l, light), *t)).collect();
                     draw_multi(hdc, x, height, &cols, *style, light);
                 }
                 x += pw;
